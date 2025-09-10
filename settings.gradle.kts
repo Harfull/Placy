@@ -1,1 +1,2 @@
-rootProject.name = "JarPlaceholders"
+rootProject.name = "Placy"
+

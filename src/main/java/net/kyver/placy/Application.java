@@ -33,7 +33,7 @@ public class Application {
         String contextPath = environment.getProperty("server.servlet.context-path", "/");
 
         logger.info("=================================================================");
-        logger.info("JarPlaceholders app is now running");
+        logger.info("Placy app is now running");
         logger.info("Server is running on: http://localhost:{}{}", port, contextPath);
         logger.info("API endpoint: http://localhost:{}/api/v1/transform", port);
 
