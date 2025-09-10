@@ -161,12 +161,4 @@ public class ClassProcessor {
         }
         return result;
     }
-
-    public void clearCache() {
-        classCache.clear();
-    }
-
-    public int getCacheSize() {
-        return classCache.size();
-    }
 }

@@ -312,13 +312,4 @@ public class DocumentProcessor {
             default -> false;
         };
     }
-
-    public void clearCache() {
-        documentCache.clear();
-        logger.debug("Document cache cleared");
-    }
-
-    public int getCacheSize() {
-        return documentCache.size();
-    }
 }

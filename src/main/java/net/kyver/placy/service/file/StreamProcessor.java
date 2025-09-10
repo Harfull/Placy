@@ -99,7 +99,13 @@ public class StreamProcessor {
 
     public byte[] readAllBytes(InputStream input) throws IOException {
         try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
-            copyStream(input, output);
+            byte[] buffer = new byte[STREAM_BUFFER_SIZE];
+            int bytesRead;
+
+            while ((bytesRead = input.read(buffer)) != -1) {
+                output.write(buffer, 0, bytesRead);
+            }
+
             return output.toByteArray();
         }
     }

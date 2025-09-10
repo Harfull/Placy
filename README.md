@@ -67,7 +67,7 @@ HTML, CSS, XML, JSON, YAML, SQL, Shell scripts, and more
 
 1. **Download the latest release**
    ```bash
-   wget https://github.com/yourusername/placy/releases/latest/download/server.jar
+   wget https://github.com/Harfull/placy/releases/latest/download/server.jar
    ```
 
 2. **Run the application**

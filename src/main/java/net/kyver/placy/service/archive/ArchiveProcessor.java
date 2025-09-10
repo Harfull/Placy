@@ -4,31 +4,15 @@ import net.kyver.placy.service.file.FileTypeDetector;
 import net.kyver.placy.service.file.StreamProcessor;
 import net.kyver.placy.service.image.ImageProcessor;
 import net.kyver.placy.service.document.DocumentProcessor;
-import org.apache.commons.compress.archivers.tar.TarArchiveEntry;
-import org.apache.commons.compress.archivers.tar.TarArchiveInputStream;
-import org.apache.commons.compress.archivers.tar.TarArchiveOutputStream;
-import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry;
-import org.apache.commons.compress.archivers.sevenz.SevenZFile;
-import org.apache.commons.compress.archivers.sevenz.SevenZOutputFile;
-import org.apache.commons.compress.compressors.CompressorInputStream;
-import org.apache.commons.compress.compressors.CompressorOutputStream;
-import org.apache.commons.compress.compressors.CompressorStreamFactory;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
-import java.nio.file.Files;
-import java.nio.file.Path;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ConcurrentMap;
+import java.util.zip.*;
 import java.util.jar.*;
-import java.util.zip.CRC32;
-import java.util.zip.ZipEntry;
-import java.util.zip.ZipInputStream;
-import java.util.zip.ZipOutputStream;
 
 @Component
 public class ArchiveProcessor {
@@ -40,15 +24,12 @@ public class ArchiveProcessor {
     private final ImageProcessor imageProcessor;
     private final DocumentProcessor documentProcessor;
 
-    private final ConcurrentMap<String, Long> crcCache = new ConcurrentHashMap<>();
-    private final ConcurrentMap<String, byte[]> archiveCache = new ConcurrentHashMap<>();
-
     @Autowired
     public ArchiveProcessor(FileTypeDetector fileTypeDetector,
-                          StreamProcessor streamProcessor,
-                          ClassProcessor classProcessor,
-                          ImageProcessor imageProcessor,
-                          DocumentProcessor documentProcessor) {
+                            StreamProcessor streamProcessor,
+                            ClassProcessor classProcessor,
+                            ImageProcessor imageProcessor,
+                            DocumentProcessor documentProcessor) {
         this.fileTypeDetector = fileTypeDetector;
         this.streamProcessor = streamProcessor;
         this.classProcessor = classProcessor;
@@ -57,355 +38,189 @@ public class ArchiveProcessor {
     }
 
     public byte[] processArchive(byte[] archiveBytes, String filename, Map<String, String> placeholders) {
-        if (placeholders.isEmpty()) {
+        if (placeholders == null || placeholders.isEmpty()) {
             return archiveBytes;
         }
 
-        String cacheKey = createCacheKey(archiveBytes, placeholders, filename);
-        return archiveCache.computeIfAbsent(cacheKey, key -> {
-            try {
-                return processArchiveInternal(archiveBytes, filename, placeholders);
-            } catch (Exception e) {
-                logger.warn("Failed to process archive {}, returning original", filename, e);
-                return archiveBytes;
-            }
-        });
-    }
+        try {
+            String extension = getFileExtension(filename).toLowerCase();
 
-    private byte[] processArchiveInternal(byte[] archiveBytes, String filename, Map<String, String> placeholders) throws IOException {
-        String extension = fileTypeDetector.getFileExtension(filename);
-
-        return switch (extension) {
-            case ".jar", ".war", ".ear", ".aar" -> transformJarFile(archiveBytes, placeholders);
-            case ".zip", ".apk", ".xpi", ".crx", ".vsix", ".nupkg", ".snupkg" ->
-                transformZipFile(archiveBytes, placeholders);
-            case ".tar" -> transformTarFile(archiveBytes, placeholders);
-            case ".tar.gz", ".tgz" -> transformCompressedTarFile(archiveBytes, placeholders, "gzip");
-            case ".tar.bz2", ".tbz2" -> transformCompressedTarFile(archiveBytes, placeholders, "bzip2");
-            case ".tar.xz", ".txz" -> transformCompressedTarFile(archiveBytes, placeholders, "xz");
-            case ".7z", ".7zip" -> transform7zFile(archiveBytes, placeholders);
-            case ".gz", ".gzip" -> transformGzipFile(archiveBytes, placeholders);
-            case ".bz2", ".bzip2" -> transformBzip2File(archiveBytes, placeholders);
-            case ".xz" -> transformXzFile(archiveBytes, placeholders);
-            default -> {
-                logger.debug("Unsupported archive format: {}", extension);
-                yield archiveBytes;
-            }
-        };
-    }
-
-    private byte[] transformJarFile(byte[] jarBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Transforming JAR file of size: {} bytes", jarBytes.length);
-
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(jarBytes);
-             JarInputStream jis = new JarInputStream(bais);
-             ByteArrayOutputStream baos = new ByteArrayOutputStream(jarBytes.length)) {
-
-            Manifest manifest = jis.getManifest();
-
-            try (JarOutputStream jos = manifest != null ?
-                new JarOutputStream(baos, manifest) : new JarOutputStream(baos)) {
-
-                processJarEntries(jis, jos, placeholders, jarBytes);
-
-                jos.finish();
-                logger.debug("Successfully transformed JAR file with {} placeholders", placeholders.size());
-                return baos.toByteArray();
-            }
-        }
-    }
-
-    private void processJarEntries(JarInputStream jis, JarOutputStream jos,
-                                 Map<String, String> placeholders, byte[] originalJarBytes) throws IOException {
-
-        Map<String, EntryData> entries = new LinkedHashMap<>();
-        JarEntry entry;
-
-        while ((entry = jis.getNextJarEntry()) != null) {
-            if (entry.isDirectory()) {
-                entries.put(entry.getName(), new EntryData(entry, null, true));
-                continue;
-            }
-
-            byte[] entryBytes = streamProcessor.readAllBytes(jis);
-            entries.put(entry.getName(), new EntryData(entry, entryBytes, false));
-        }
-
-        try (JarInputStream originalJis = new JarInputStream(new ByteArrayInputStream(originalJarBytes))) {
-            JarEntry originalEntry;
-            while ((originalEntry = originalJis.getNextJarEntry()) != null) {
-                EntryData entryData = entries.get(originalEntry.getName());
-                if (entryData == null) continue;
-
-                if (entryData.isDirectory) {
-                    writeDirectoryEntry(jos, originalEntry);
-                } else {
-                    writeFileEntry(jos, originalEntry, entryData.data, placeholders);
+            return switch (extension) {
+                case ".jar", ".war", ".ear", ".aar" -> processJarArchive(archiveBytes, placeholders);
+                case ".zip", ".apk", ".xpi", ".crx", ".vsix", ".nupkg", ".snupkg" ->
+                        processZipArchive(archiveBytes, placeholders);
+                default -> {
+                    logger.debug("Unsupported archive format: {}", extension);
+                    yield archiveBytes;
                 }
+            };
+        } catch (Exception e) {
+            logger.error("Failed to process archive {}: {}", filename, e.getMessage(), e);
+            return archiveBytes;
+        }
+    }
+
+    private byte[] processJarArchive(byte[] jarBytes, Map<String, String> placeholders) throws IOException {
+        logger.debug("Processing JAR archive of {} bytes", jarBytes.length);
+
+        try (ByteArrayInputStream input = new ByteArrayInputStream(jarBytes);
+             JarInputStream jarIn = new JarInputStream(input);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+
+            Manifest manifest = jarIn.getManifest();
+
+            try (JarOutputStream jarOut = manifest != null ?
+                    new JarOutputStream(output, manifest) :
+                    new JarOutputStream(output)) {
+
+                JarEntry entry;
+                while ((entry = jarIn.getNextJarEntry()) != null) {
+                    processJarEntry(jarIn, jarOut, entry, placeholders);
+                }
+
+                jarOut.finish();
+                byte[] result = output.toByteArray();
+                logger.debug("JAR processing complete. Input: {} bytes, Output: {} bytes",
+                        jarBytes.length, result.length);
+                return result;
             }
         }
     }
 
-    private void writeDirectoryEntry(JarOutputStream jos, JarEntry originalEntry) throws IOException {
-        JarEntry dirEntry = new JarEntry(originalEntry.getName());
-        copyEntryAttributes(originalEntry, dirEntry);
-        jos.putNextEntry(dirEntry);
-        jos.closeEntry();
+    private byte[] processZipArchive(byte[] zipBytes, Map<String, String> placeholders) throws IOException {
+        logger.debug("Processing ZIP archive of {} bytes", zipBytes.length);
+
+        try (ByteArrayInputStream input = new ByteArrayInputStream(zipBytes);
+             ZipInputStream zipIn = new ZipInputStream(input);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+
+            try (ZipOutputStream zipOut = new ZipOutputStream(output)) {
+                ZipEntry entry;
+                while ((entry = zipIn.getNextEntry()) != null) {
+                    processZipEntry(zipIn, zipOut, entry, placeholders);
+                }
+
+                zipOut.finish();
+                byte[] result = output.toByteArray();
+                logger.debug("ZIP processing complete. Input: {} bytes, Output: {} bytes",
+                        zipBytes.length, result.length);
+                return result;
+            }
+        }
     }
 
-    private void writeFileEntry(JarOutputStream jos, JarEntry originalEntry,
-                              byte[] originalBytes, Map<String, String> placeholders) throws IOException {
-        String entryName = originalEntry.getName();
-        byte[] transformedBytes = processEntryContent(entryName, originalBytes, placeholders);
+    private void processJarEntry(JarInputStream jarIn, JarOutputStream jarOut,
+                                 JarEntry originalEntry, Map<String, String> placeholders) throws IOException {
 
-        JarEntry newEntry = new JarEntry(entryName);
-        copyEntryAttributes(originalEntry, newEntry);
+        if (originalEntry.isDirectory()) {
+            JarEntry newEntry = new JarEntry(originalEntry.getName());
+            copyJarEntryMetadata(originalEntry, newEntry);
+            jarOut.putNextEntry(newEntry);
+            jarOut.closeEntry();
+            return;
+        }
 
-        newEntry.setSize(transformedBytes.length);
+        byte[] entryData = readEntryData(jarIn);
+
+        byte[] processedData = processEntryContent(originalEntry.getName(), entryData, placeholders);
+
+        JarEntry newEntry = new JarEntry(originalEntry.getName());
+        copyJarEntryMetadata(originalEntry, newEntry);
+
+        newEntry.setSize(processedData.length);
         if (newEntry.getMethod() == ZipEntry.STORED) {
-            newEntry.setCrc(calculateCRC32Cached(entryName + transformedBytes.length, transformedBytes));
+            CRC32 crc = new CRC32();
+            crc.update(processedData);
+            newEntry.setCrc(crc.getValue());
         }
 
-        jos.putNextEntry(newEntry);
-        jos.write(transformedBytes);
-        jos.closeEntry();
+        jarOut.putNextEntry(newEntry);
+        jarOut.write(processedData);
+        jarOut.closeEntry();
     }
 
-    private byte[] transformZipFile(byte[] zipBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Transforming ZIP file of size: {} bytes", zipBytes.length);
+    private void processZipEntry(ZipInputStream zipIn, ZipOutputStream zipOut,
+                                 ZipEntry originalEntry, Map<String, String> placeholders) throws IOException {
 
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(zipBytes);
-             ByteArrayOutputStream baos = new ByteArrayOutputStream(zipBytes.length);
-             ZipInputStream zis = new ZipInputStream(bais);
-             ZipOutputStream zos = new ZipOutputStream(baos)) {
-
-            ZipEntry entry;
-            while ((entry = zis.getNextEntry()) != null) {
-                if (entry.isDirectory()) {
-                    ZipEntry dirEntry = new ZipEntry(entry.getName());
-                    dirEntry.setTime(entry.getTime());
-                    zos.putNextEntry(dirEntry);
-                    zos.closeEntry();
-                    continue;
-                }
-
-                byte[] entryBytes = streamProcessor.readAllBytes(zis);
-                byte[] transformedBytes = processEntryContent(entry.getName(), entryBytes, placeholders);
-
-                ZipEntry newEntry = new ZipEntry(entry.getName());
-                newEntry.setTime(entry.getTime());
-                zos.putNextEntry(newEntry);
-                zos.write(transformedBytes);
-                zos.closeEntry();
-            }
-
-            logger.debug("Transformed ZIP file with {} placeholders", placeholders.size());
-            return baos.toByteArray();
+        if (originalEntry.isDirectory()) {
+            ZipEntry newEntry = new ZipEntry(originalEntry.getName());
+            copyZipEntryMetadata(originalEntry, newEntry);
+            zipOut.putNextEntry(newEntry);
+            zipOut.closeEntry();
+            return;
         }
+
+        byte[] entryData = readEntryData(zipIn);
+
+        byte[] processedData = processEntryContent(originalEntry.getName(), entryData, placeholders);
+
+        ZipEntry newEntry = new ZipEntry(originalEntry.getName());
+        copyZipEntryMetadata(originalEntry, newEntry);
+
+        zipOut.putNextEntry(newEntry);
+        zipOut.write(processedData);
+        zipOut.closeEntry();
     }
 
-    private byte[] transformTarFile(byte[] tarBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Processing TAR file");
-
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(tarBytes);
-             TarArchiveInputStream tais = new TarArchiveInputStream(bais);
-             ByteArrayOutputStream baos = new ByteArrayOutputStream();
-             TarArchiveOutputStream taos = new TarArchiveOutputStream(baos)) {
-
-            TarArchiveEntry entry;
-            while ((entry = tais.getNextTarEntry()) != null) {
-                if (entry.isDirectory()) {
-                    taos.putArchiveEntry(entry);
-                    taos.closeArchiveEntry();
-                    continue;
-                }
-
-                byte[] entryBytes = streamProcessor.readAllBytes(tais);
-                byte[] transformedBytes = processEntryContent(entry.getName(), entryBytes, placeholders);
-
-                TarArchiveEntry newEntry = new TarArchiveEntry(entry.getName());
-                newEntry.setSize(transformedBytes.length);
-                newEntry.setModTime(entry.getModTime());
-                newEntry.setMode(entry.getMode());
-
-                taos.putArchiveEntry(newEntry);
-                taos.write(transformedBytes);
-                taos.closeArchiveEntry();
-            }
-
-            taos.finish();
-            return baos.toByteArray();
-        }
-    }
-
-    private byte[] transformCompressedTarFile(byte[] archiveBytes, Map<String, String> placeholders, String compressionType) throws IOException {
-        logger.debug("Processing compressed TAR file with {} compression", compressionType);
-
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(archiveBytes)) {
-
-            CompressorInputStream cis = null;
-            try {
-                cis = new CompressorStreamFactory().createCompressorInputStream(compressionType, bais);
-            } catch (org.apache.commons.compress.compressors.CompressorException e) {
-                throw new IOException("Failed to create compressor input stream for " + compressionType, e);
-            }
-
-            try (CompressorInputStream compressorStream = cis;
-                 ByteArrayOutputStream tarBaos = new ByteArrayOutputStream()) {
-
-                streamProcessor.copyStream(compressorStream, tarBaos);
-                byte[] tarBytes = tarBaos.toByteArray();
-
-                byte[] processedTarBytes = transformTarFile(tarBytes, placeholders);
-
-                try (ByteArrayOutputStream compressedBaos = new ByteArrayOutputStream()) {
-
-                    CompressorOutputStream cos = null;
-                    try {
-                        cos = new CompressorStreamFactory().createCompressorOutputStream(compressionType, compressedBaos);
-                    } catch (org.apache.commons.compress.compressors.CompressorException e) {
-                        throw new IOException("Failed to create compressor output stream for " + compressionType, e);
-                    }
-
-                    try (CompressorOutputStream compressorOut = cos;
-                         ByteArrayInputStream processedBais = new ByteArrayInputStream(processedTarBytes)) {
-
-                        streamProcessor.copyStream(processedBais, compressorOut);
-                        compressorOut.close();
-                        return compressedBaos.toByteArray();
-                    }
-                }
-            }
-        }
-    }
-
-    private byte[] transform7zFile(byte[] sevenZBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Processing 7Z file");
-
-        Path inputTemp = Files.createTempFile("input", ".7z");
-        Path outputTemp = Files.createTempFile("output", ".7z");
-
+    private byte[] processEntryContent(String entryName, byte[] originalData, Map<String, String> placeholders) {
         try {
-            Files.write(inputTemp, sevenZBytes);
-
-            try (SevenZFile sevenZFile = new SevenZFile(inputTemp.toFile());
-                 SevenZOutputFile output = new SevenZOutputFile(outputTemp.toFile())) {
-
-                SevenZArchiveEntry entry;
-                while ((entry = sevenZFile.getNextEntry()) != null) {
-                    if (entry.isDirectory()) {
-                        output.putArchiveEntry(entry);
-                        output.closeArchiveEntry();
-                        continue;
-                    }
-
-                    byte[] entryBytes = new byte[(int) entry.getSize()];
-                    sevenZFile.read(entryBytes);
-
-                    byte[] transformedBytes = processEntryContent(entry.getName(), entryBytes, placeholders);
-
-                    SevenZArchiveEntry newEntry = output.createArchiveEntry(
-                        outputTemp.toFile(), entry.getName());
-                    newEntry.setSize(transformedBytes.length);
-
-                    output.putArchiveEntry(newEntry);
-                    output.write(transformedBytes);
-                    output.closeArchiveEntry();
-                }
-
-                output.finish();
+            if (isArchiveFile(entryName)) {
+                logger.debug("Processing nested archive: {}", entryName);
+                return processArchive(originalData, entryName, placeholders);
             }
 
-            return Files.readAllBytes(outputTemp);
+            String extension = getFileExtension(entryName).toLowerCase();
 
-        } finally {
-            Files.deleteIfExists(inputTemp);
-            Files.deleteIfExists(outputTemp);
-        }
-    }
-
-    private byte[] transformGzipFile(byte[] gzipBytes, Map<String, String> placeholders) throws IOException {
-        return transformCompressedFile(gzipBytes, placeholders, "gzip");
-    }
-
-    private byte[] transformBzip2File(byte[] bzip2Bytes, Map<String, String> placeholders) throws IOException {
-        return transformCompressedFile(bzip2Bytes, placeholders, "bzip2");
-    }
-
-    private byte[] transformXzFile(byte[] xzBytes, Map<String, String> placeholders) throws IOException {
-        return transformCompressedFile(xzBytes, placeholders, "xz");
-    }
-
-    private byte[] transformCompressedFile(byte[] compressedBytes, Map<String, String> placeholders, String compressionType) throws IOException {
-        logger.debug("Processing {} compressed file", compressionType);
-
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(compressedBytes)) {
-
-            CompressorInputStream cis = null;
-            try {
-                cis = new CompressorStreamFactory().createCompressorInputStream(compressionType, bais);
-            } catch (org.apache.commons.compress.compressors.CompressorException e) {
-                throw new IOException("Failed to create compressor input stream for " + compressionType, e);
-            }
-
-            try (CompressorInputStream compressorStream = cis;
-                 ByteArrayOutputStream decompressedBaos = new ByteArrayOutputStream()) {
-
-                streamProcessor.copyStream(compressorStream, decompressedBaos);
-                byte[] decompressedBytes = decompressedBaos.toByteArray();
-
-                if (fileTypeDetector.isTextFile("", decompressedBytes)) {
-                    decompressedBytes = streamProcessor.transformTextStream(decompressedBytes, placeholders);
-                }
-
-                try (ByteArrayOutputStream compressedBaos = new ByteArrayOutputStream()) {
-
-                    CompressorOutputStream cos = null;
-                    try {
-                        cos = new CompressorStreamFactory().createCompressorOutputStream(compressionType, compressedBaos);
-                    } catch (org.apache.commons.compress.compressors.CompressorException e) {
-                        throw new IOException("Failed to create compressor output stream for " + compressionType, e);
-                    }
-
-                    try (CompressorOutputStream compressorOut = cos;
-                         ByteArrayInputStream processedBais = new ByteArrayInputStream(decompressedBytes)) {
-
-                        streamProcessor.copyStream(processedBais, compressorOut);
-                        compressorOut.close();
-                        return compressedBaos.toByteArray();
-                    }
-                }
-            }
-        }
-    }
-
-    private byte[] processEntryContent(String entryName, byte[] originalBytes, Map<String, String> placeholders) {
-        try {
             if (entryName.endsWith(".class")) {
-                return classProcessor.replacePlaceholdersInClass(originalBytes, placeholders);
-            } else if (fileTypeDetector.isTextFile(entryName, originalBytes)) {
-                return streamProcessor.transformTextStream(originalBytes, placeholders);
+                return classProcessor.replacePlaceholdersInClass(originalData, placeholders);
+            } else if (isTextFile(entryName, originalData)) {
+                return streamProcessor.transformTextStream(originalData, placeholders);
             } else if (isImageFile(entryName)) {
-                return imageProcessor.processImage(originalBytes, entryName, placeholders);
+                return imageProcessor.processImage(originalData, entryName, placeholders);
             } else if (documentProcessor.isSupportedDocument(entryName)) {
-                return documentProcessor.processDocument(originalBytes, entryName, placeholders);
-            } else {
-                return originalBytes;
+                return documentProcessor.processDocument(originalData, entryName, placeholders);
             }
+
+            return originalData;
+
         } catch (Exception e) {
             logger.warn("Failed to process entry {}: {}", entryName, e.getMessage());
-            return originalBytes;
+            return originalData;
         }
     }
 
-    private boolean isImageFile(String filename) {
-        String extension = fileTypeDetector.getFileExtension(filename);
-        return fileTypeDetector.getImageExtensions().contains(extension);
+    private byte[] readEntryData(InputStream inputStream) throws IOException {
+        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
+        byte[] data = new byte[8192];
+        int bytesRead;
+
+        while ((bytesRead = inputStream.read(data)) != -1) {
+            buffer.write(data, 0, bytesRead);
+        }
+
+        return buffer.toByteArray();
     }
 
-    private void copyEntryAttributes(JarEntry source, JarEntry target) {
+    private void copyJarEntryMetadata(JarEntry source, JarEntry target) throws IOException {
         target.setTime(source.getTime());
         target.setMethod(source.getMethod());
+
+        if (source.getComment() != null) {
+            target.setComment(source.getComment());
+        }
+        if (source.getExtra() != null) {
+            target.setExtra(source.getExtra());
+        }
+
+        if (source.getAttributes() != null) {
+            target.getAttributes().putAll(source.getAttributes());
+        }
+    }
+
+    private void copyZipEntryMetadata(ZipEntry source, ZipEntry target) {
+        target.setTime(source.getTime());
+        target.setMethod(source.getMethod());
+
         if (source.getComment() != null) {
             target.setComment(source.getComment());
         }
@@ -414,39 +229,31 @@ public class ArchiveProcessor {
         }
     }
 
-    private long calculateCRC32Cached(String cacheKey, byte[] data) {
-        return crcCache.computeIfAbsent(cacheKey, key -> {
-            CRC32 crc = new CRC32();
-            crc.update(data);
-            return crc.getValue();
-        });
+    private boolean isArchiveFile(String filename) {
+        String extension = getFileExtension(filename).toLowerCase();
+        return Set.of(".jar", ".war", ".ear", ".aar", ".zip", ".apk", ".xpi",
+                ".crx", ".vsix", ".nupkg", ".snupkg").contains(extension);
     }
 
-    private String createCacheKey(byte[] archiveBytes, Map<String, String> placeholders, String filename) {
-        return filename + ":" + archiveBytes.length + ":" + placeholders.hashCode();
+    private boolean isTextFile(String filename, byte[] data) {
+        return fileTypeDetector.isTextFile(filename, data);
     }
 
-    public void clearCache() {
-        crcCache.clear();
-        archiveCache.clear();
-        logger.debug("Archive processor caches cleared");
+    private boolean isImageFile(String filename) {
+        String extension = getFileExtension(filename).toLowerCase();
+        return fileTypeDetector.getImageExtensions().contains(extension);
     }
 
-    public Set<String> getSupportedFormats() {
-        return Set.of(".jar", ".war", ".ear", ".aar", ".zip", ".apk", ".xpi", ".crx", ".vsix",
-                     ".nupkg", ".snupkg", ".tar", ".tar.gz", ".tgz", ".tar.bz2", ".tbz2",
-                     ".tar.xz", ".txz", ".7z", ".7zip", ".gz", ".gzip", ".bz2", ".bzip2", ".xz");
-    }
-
-    private static class EntryData {
-        final JarEntry entry;
-        final byte[] data;
-        final boolean isDirectory;
-
-        EntryData(JarEntry entry, byte[] data, boolean isDirectory) {
-            this.entry = entry;
-            this.data = data;
-            this.isDirectory = isDirectory;
+    private String getFileExtension(String filename) {
+        if (filename == null || filename.isEmpty()) {
+            return "";
         }
+
+        int lastDot = filename.lastIndexOf('.');
+        if (lastDot == -1 || lastDot == filename.length() - 1) {
+            return "";
+        }
+
+        return filename.substring(lastDot);
     }
 }

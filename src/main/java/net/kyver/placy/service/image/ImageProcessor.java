@@ -188,37 +188,4 @@ public class ImageProcessor {
         String format = getImageFormat(filename);
         return isMetadataEditingSupported(format);
     }
-
-    public ImageInfo getImageInfo(byte[] imageBytes, String filename) throws IOException {
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(imageBytes);
-             ImageInputStream iis = ImageIO.createImageInputStream(bais)) {
-
-            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
-            if (!readers.hasNext()) {
-                throw new IOException("No image reader found for: " + filename);
-            }
-
-            ImageReader reader = readers.next();
-            reader.setInput(iis);
-
-            int width = reader.getWidth(0);
-            int height = reader.getHeight(0);
-            String format = reader.getFormatName();
-
-            reader.dispose();
-
-            return new ImageInfo(width, height, format, supportsMetadataEditing(filename));
-        }
-    }
-
-    public void clearCache() {
-        imageCache.clear();
-        logger.debug("Image cache cleared");
-    }
-
-    public int getCacheSize() {
-        return imageCache.size();
-    }
-
-    public static record ImageInfo(int width, int height, String format, boolean supportsMetadataEditing) {}
 }
