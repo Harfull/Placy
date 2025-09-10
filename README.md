@@ -67,15 +67,15 @@ HTML, CSS, XML, JSON, YAML, SQL, Shell scripts, and more
 
 1. **Download the latest release**
    ```bash
-   wget https://github.com/Harfull/placy/releases/latest/download/server.jar
+   wget https://github.com/Harfull/placy/releases/latest/download/Placy.jar
    ```
 
 2. **Run the application**
    ```bash
-   java -jar server.jar
+   java -jar Placy.jar
    ```
 
-3. **Access the web interface**
+3. **Access the API**
    ```
    http://localhost:8080
    ```
@@ -95,14 +95,6 @@ export SSL_KEYSTORE_PATH=/path/to/keystore.p12
 export SSL_KEYSTORE_PASSWORD=changeit
 export SSL_KEY_ALIAS=placy
 ```
-
-## 🔧 Usage
-
-### Web Interface
-Navigate to `http://localhost:8080` for the intuitive web interface:
-1. Upload your file (supports drag & drop)
-2. Enter placeholder mappings in JSON format
-3. Download the transformed file instantly
 
 ### API Endpoint
 
@@ -141,7 +133,7 @@ curl -X POST http://localhost:8080/api/v1/transform \
 ### Modular Design
 ```
 📦 Placy
-├── 🎮 Controllers (REST API & Web Interface)
+├── 🎮 Controllers (REST API)
 ├── 🔍 FileTypeDetector (Smart file type detection)
 ├── 🌊 StreamProcessor (High-performance streaming)
 ├── 📦 ArchiveProcessor (All archive formats)
