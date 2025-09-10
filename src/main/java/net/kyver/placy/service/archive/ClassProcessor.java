@@ -8,12 +8,14 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Component
 public class ClassProcessor {
     private static final Logger logger = LoggerFactory.getLogger(ClassProcessor.class);
 
     private final ConcurrentMap<String, byte[]> classCache = new ConcurrentHashMap<>();
+    private static final int MAX_CACHE_SIZE = 1000;
 
     public byte[] replacePlaceholdersInClass(byte[] classBytes, Map<String, String> replacements) {
         if (replacements.isEmpty()) {
@@ -22,11 +24,16 @@ public class ClassProcessor {
 
         String cacheKey = createCacheKey(classBytes, replacements);
 
+        if (classCache.size() > MAX_CACHE_SIZE) {
+            classCache.clear();
+            logger.debug("Class cache cleared due to size limit");
+        }
+
         return classCache.computeIfAbsent(cacheKey, key -> {
             try {
                 return transformClass(classBytes, replacements);
             } catch (Exception e) {
-                logger.warn("Failed to transform class, returning original bytes", e);
+                logger.warn("Failed to transform class, returning original bytes: {}", e.getMessage());
                 return classBytes;
             }
         });
@@ -34,10 +41,10 @@ public class ClassProcessor {
 
     private byte[] transformClass(byte[] classBytes, Map<String, String> replacements) {
         ClassReader classReader = new ClassReader(classBytes);
-        ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS);
+        ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
 
         PlaceholderClassVisitor classVisitor = new PlaceholderClassVisitor(classWriter, replacements);
-        classReader.accept(classVisitor, ClassReader.SKIP_DEBUG);
+        classReader.accept(classVisitor, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
 
         return classWriter.toByteArray();
     }
@@ -46,6 +53,11 @@ public class ClassProcessor {
         int classHash = java.util.Arrays.hashCode(classBytes);
         int replacementHash = replacements.hashCode();
         return classHash + ":" + replacementHash;
+    }
+
+    public void clearCache() {
+        classCache.clear();
+        logger.debug("Class processor cache cleared");
     }
 
     private static class PlaceholderClassVisitor extends ClassVisitor {
@@ -153,12 +165,14 @@ public class ClassProcessor {
             return original;
         }
 
-        String result = original;
-        for (Map.Entry<String, String> entry : replacements.entrySet()) {
-            if (result.contains(entry.getKey())) {
-                result = result.replace(entry.getKey(), entry.getValue());
-            }
-        }
-        return result;
+        final AtomicReference<String>[] result = new AtomicReference[]{new AtomicReference<>(original)};
+        replacements.entrySet().stream()
+                .sorted((e1, e2) -> Integer.compare(e2.getKey().length(), e1.getKey().length()))
+                .forEach(entry -> {
+                    if (result[0].get().contains(entry.getKey())) {
+                        result[0].set(result[0].get().replace(entry.getKey(), entry.getValue()));
+                    }
+                });
+        return result[0].get();
     }
 }

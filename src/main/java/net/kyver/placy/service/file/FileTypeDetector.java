@@ -116,9 +116,9 @@ public class FileTypeDetector {
                         return false;
                     }
                 }
-            } else if (unsignedByte >= 0x20 && unsignedByte <= 0x7E) {
+            } else if (unsignedByte <= 0x7E) {
                 printableChars++;
-            } else if (unsignedByte >= 0x80) {
+            } else {
                 extendedAsciiChars++;
             }
         }
@@ -144,13 +144,9 @@ public class FileTypeDetector {
             bytes[0] == UTF8_BOM[0] && bytes[1] == UTF8_BOM[1] && bytes[2] == UTF8_BOM[2]) {
             return true;
         }
-        if (bytes.length >= 2) {
-            if ((bytes[0] == UTF16_BE_BOM[0] && bytes[1] == UTF16_BE_BOM[1]) ||
-                (bytes[0] == UTF16_LE_BOM[0] && bytes[1] == UTF16_LE_BOM[1])) {
-                return true;
-            }
-        }
-        return false;
+        return bytes.length >= 2 &&
+               ((bytes[0] == UTF16_BE_BOM[0] && bytes[1] == UTF16_BE_BOM[1]) ||
+                (bytes[0] == UTF16_LE_BOM[0] && bytes[1] == UTF16_LE_BOM[1]));
     }
 
     private boolean hasBinarySignature(byte[] bytes) {
@@ -217,10 +213,6 @@ public class FileTypeDetector {
         return ARCHIVE_EXTENSIONS.contains(extension);
     }
 
-    public boolean isJarFile(String filename) {
-        return ".jar".equals(getFileExtension(filename));
-    }
-
     public boolean isSupportedFileType(String filename) {
         if (filename == null) return false;
         String extension = getFileExtension(filename);
@@ -231,24 +223,8 @@ public class FileTypeDetector {
                 || OTHER_EXTENSIONS.contains(extension);
     }
 
-    public Set<String> getTextExtensions() {
-        return TEXT_EXTENSIONS;
-    }
-
-    public Set<String> getArchiveExtensions() {
-        return ARCHIVE_EXTENSIONS;
-    }
-
     public Set<String> getImageExtensions() {
         return IMAGE_EXTENSIONS;
-    }
-
-    public Set<String> getDocumentExtensions() {
-        return DOCUMENT_EXTENSIONS;
-    }
-
-    public Set<String> getOtherExtensions() {
-        return OTHER_EXTENSIONS;
     }
 
     public Set<String> getAllSupportedExtensions() {
@@ -258,5 +234,11 @@ public class FileTypeDetector {
         ).stream()
         .flatMap(Set::stream)
         .collect(java.util.stream.Collectors.toSet());
+    }
+
+    public void clearCaches() {
+        textFileCache.clear();
+        extensionCache.clear();
+        logger.debug("FileTypeDetector caches cleared");
     }
 }

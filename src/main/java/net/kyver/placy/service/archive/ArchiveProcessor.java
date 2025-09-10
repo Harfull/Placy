@@ -169,8 +169,6 @@ public class ArchiveProcessor {
                 return processArchive(originalData, entryName, placeholders);
             }
 
-            String extension = getFileExtension(entryName).toLowerCase();
-
             if (entryName.endsWith(".class")) {
                 return classProcessor.replacePlaceholdersInClass(originalData, placeholders);
             } else if (isTextFile(entryName, originalData)) {

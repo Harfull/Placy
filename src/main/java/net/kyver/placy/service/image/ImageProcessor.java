@@ -15,6 +15,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Iterator;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -23,8 +24,11 @@ public class ImageProcessor {
     private static final Logger logger = LoggerFactory.getLogger(ImageProcessor.class);
 
     private final ConcurrentMap<String, byte[]> imageCache = new ConcurrentHashMap<>();
+    private static final int MAX_CACHE_SIZE = 200;
 
-    private static final String[] METADATA_SUPPORTED_FORMATS = {"jpeg", "jpg", "png", "tiff", "tif", "gif"};
+    private static final Set<String> METADATA_SUPPORTED_FORMATS = Set.of(
+        "jpeg", "jpg", "png", "tiff", "tif", "gif", "bmp"
+    );
 
     public byte[] processImage(byte[] imageBytes, String filename, Map<String, String> placeholders) throws IOException {
         if (placeholders.isEmpty()) {
@@ -32,11 +36,17 @@ public class ImageProcessor {
         }
 
         String cacheKey = createCacheKey(imageBytes, placeholders, filename);
+
+        if (imageCache.size() > MAX_CACHE_SIZE) {
+            imageCache.clear();
+            logger.debug("Image cache cleared due to size limit");
+        }
+
         return imageCache.computeIfAbsent(cacheKey, key -> {
             try {
                 return processImageInternal(imageBytes, filename, placeholders);
             } catch (IOException e) {
-                logger.warn("Failed to process image {}, returning original", filename, e);
+                logger.warn("Failed to process image {}, returning original: {}", filename, e.getMessage());
                 return imageBytes;
             }
         });
@@ -60,16 +70,20 @@ public class ImageProcessor {
             }
 
             ImageReader reader = readers.next();
-            reader.setInput(iis);
+            try {
+                reader.setInput(iis);
 
-            BufferedImage image = reader.read(0);
-            IIOMetadata metadata = reader.getImageMetadata(0);
+                BufferedImage image = reader.read(0);
+                IIOMetadata metadata = reader.getImageMetadata(0);
 
-            if (metadata != null) {
-                processMetadata(metadata, placeholders);
+                if (metadata != null) {
+                    processMetadata(metadata, placeholders);
+                }
+
+                return writeImageWithMetadata(image, metadata, format);
+            } finally {
+                reader.dispose();
             }
-
-            return writeImageWithMetadata(image, metadata, format);
 
         } catch (Exception e) {
             logger.warn("Error processing image metadata for {}: {}", filename, e.getMessage());
@@ -82,9 +96,13 @@ public class ImageProcessor {
             String[] metadataFormatNames = metadata.getMetadataFormatNames();
 
             for (String formatName : metadataFormatNames) {
-                IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(formatName);
-                processMetadataNode(root, placeholders);
-                metadata.setFromTree(formatName, root);
+                try {
+                    IIOMetadataNode root = (IIOMetadataNode) metadata.getAsTree(formatName);
+                    processMetadataNode(root, placeholders);
+                    metadata.setFromTree(formatName, root);
+                } catch (Exception e) {
+                    logger.debug("Failed to process metadata format {}: {}", formatName, e.getMessage());
+                }
             }
         } catch (Exception e) {
             logger.debug("Failed to process metadata: {}", e.getMessage());
@@ -115,8 +133,8 @@ public class ImageProcessor {
 
         for (int i = 0; i < node.getLength(); i++) {
             org.w3c.dom.Node child = node.item(i);
-            if (child instanceof IIOMetadataNode) {
-                processMetadataNode((IIOMetadataNode) child, placeholders);
+            if (child instanceof IIOMetadataNode childNode) {
+                processMetadataNode(childNode, placeholders);
             }
         }
     }
@@ -133,12 +151,22 @@ public class ImageProcessor {
                 writer.setOutput(ios);
 
                 javax.imageio.ImageWriteParam writeParam = writer.getDefaultWriteParam();
-                javax.imageio.IIOImage iioImage = new javax.imageio.IIOImage(image, null, metadata);
 
+                if (writeParam.canWriteCompressed()) {
+                    writeParam.setCompressionMode(javax.imageio.ImageWriteParam.MODE_EXPLICIT);
+                    String[] compressionTypes = writeParam.getCompressionTypes();
+                    if (compressionTypes != null && compressionTypes.length > 0) {
+                        writeParam.setCompressionType(compressionTypes[0]);
+                        writeParam.setCompressionQuality(0.9f);
+                    }
+                }
+
+                javax.imageio.IIOImage iioImage = new javax.imageio.IIOImage(image, null, metadata);
                 writer.write(null, iioImage, writeParam);
-                writer.dispose();
 
                 return baos.toByteArray();
+            } finally {
+                writer.dispose();
             }
         }
     }
@@ -149,21 +177,13 @@ public class ImageProcessor {
         int lastDot = filename.lastIndexOf('.');
         if (lastDot > 0) {
             String ext = filename.substring(lastDot + 1).toLowerCase();
-            if ("jpg".equals(ext)) {
-                return "jpeg";
-            }
-            return ext;
+            return "jpg".equals(ext) ? "jpeg" : ext;
         }
         return "";
     }
 
     private boolean isMetadataEditingSupported(String format) {
-        for (String supportedFormat : METADATA_SUPPORTED_FORMATS) {
-            if (supportedFormat.equals(format)) {
-                return true;
-            }
-        }
-        return false;
+        return METADATA_SUPPORTED_FORMATS.contains(format);
     }
 
     private String applyPlaceholders(String text, Map<String, String> placeholders) {
@@ -171,21 +191,18 @@ public class ImageProcessor {
             return text;
         }
 
-        String result = text;
-        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
-            if (result.contains(entry.getKey())) {
-                result = result.replace(entry.getKey(), entry.getValue());
-            }
-        }
-        return result;
+        final String[] result = {text};
+        placeholders.entrySet().stream()
+                .sorted((e1, e2) -> Integer.compare(e2.getKey().length(), e1.getKey().length()))
+                .forEach(entry -> {
+                    if (result[0].contains(entry.getKey())) {
+                        result[0] = result[0].replace(entry.getKey(), entry.getValue());
+                    }
+                });
+        return result[0];
     }
 
     private String createCacheKey(byte[] imageBytes, Map<String, String> placeholders, String filename) {
         return filename + ":" + imageBytes.length + ":" + placeholders.hashCode();
-    }
-
-    public boolean supportsMetadataEditing(String filename) {
-        String format = getImageFormat(filename);
-        return isMetadataEditingSupported(format);
     }
 }

@@ -17,6 +17,7 @@ import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 
@@ -25,6 +26,17 @@ public class DocumentProcessor {
     private static final Logger logger = LoggerFactory.getLogger(DocumentProcessor.class);
 
     private final ConcurrentMap<String, byte[]> documentCache = new ConcurrentHashMap<>();
+    private static final int MAX_CACHE_SIZE = 500;
+
+    private static final Set<String> OFFICE_EXTENSIONS = Set.of(
+        ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"
+    );
+
+    private static final Set<String> TEXT_DOCUMENT_EXTENSIONS = Set.of(
+        ".txt", ".md", ".json", ".xml", ".html", ".css", ".js", ".properties", ".yml", ".yaml"
+    );
+
+    private static final Set<String> PDF_EXTENSIONS = Set.of(".pdf");
 
     public byte[] processDocument(byte[] documentBytes, String filename, Map<String, String> placeholders) {
         if (placeholders.isEmpty()) {
@@ -32,11 +44,17 @@ public class DocumentProcessor {
         }
 
         String cacheKey = createCacheKey(documentBytes, placeholders, filename);
+
+        if (documentCache.size() > MAX_CACHE_SIZE) {
+            documentCache.clear();
+            logger.debug("Document cache cleared due to size limit");
+        }
+
         return documentCache.computeIfAbsent(cacheKey, key -> {
             try {
                 return processDocumentInternal(documentBytes, filename, placeholders);
             } catch (Exception e) {
-                logger.warn("Failed to process document {}, returning original", filename, e);
+                logger.warn("Failed to process document {}, returning original: {}", filename, e.getMessage());
                 return documentBytes;
             }
         });
@@ -51,7 +69,7 @@ public class DocumentProcessor {
             case ".xlsx" -> processExcelDocument(documentBytes, placeholders);
             case ".xls" -> processLegacyExcelDocument(documentBytes, placeholders);
             case ".pptx" -> processPowerPointDocument(documentBytes, placeholders);
-            case ".pdf" -> processPdfDocument(documentBytes);
+            case ".pdf" -> processPdfDocument(documentBytes, placeholders);
             case ".txt", ".md", ".json", ".xml", ".html", ".css", ".js", ".properties", ".yml", ".yaml" ->
                 processTextDocument(documentBytes, placeholders);
             default -> {
@@ -66,53 +84,57 @@ public class DocumentProcessor {
              XWPFDocument document = new XWPFDocument(bais);
              ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
 
-            try {
-                POIXMLProperties properties = document.getProperties();
-                if (properties != null && properties.getCoreProperties() != null) {
-                    POIXMLProperties.CoreProperties core = properties.getCoreProperties();
-
-                    if (core.getTitle() != null) {
-                        core.setTitle(applyPlaceholders(core.getTitle(), placeholders));
-                    }
-                    if (core.getDescription() != null) {
-                        core.setDescription(applyPlaceholders(core.getDescription(), placeholders));
-                    }
-                    if (core.getCreator() != null) {
-                        core.setCreator(applyPlaceholders(core.getCreator(), placeholders));
-                    }
-                }
-            } catch (Exception e) {
-                logger.debug("Could not process document properties: {}", e.getMessage());
-            }
+            processDocumentProperties(document, placeholders);
 
             document.getParagraphs().forEach(paragraph ->
-                paragraph.getRuns().forEach(run -> {
-                    String text = run.getText(0);
-                    if (text != null) {
-                        String processedText = applyPlaceholders(text, placeholders);
-                        if (!text.equals(processedText)) {
-                            run.setText(processedText, 0);
-                        }
-                    }
-                })
+                paragraph.getRuns().forEach(run -> processTextRun(run, placeholders))
             );
 
             document.getHeaderList().forEach(header ->
                 header.getParagraphs().forEach(paragraph ->
-                    paragraph.getRuns().forEach(run -> {
-                        String text = run.getText(0);
-                        if (text != null) {
-                            String processedText = applyPlaceholders(text, placeholders);
-                            if (!text.equals(processedText)) {
-                                run.setText(processedText, 0);
-                            }
-                        }
-                    })
+                    paragraph.getRuns().forEach(run -> processTextRun(run, placeholders))
+                )
+            );
+
+            document.getFooterList().forEach(footer ->
+                footer.getParagraphs().forEach(paragraph ->
+                    paragraph.getRuns().forEach(run -> processTextRun(run, placeholders))
                 )
             );
 
             document.write(baos);
             return baos.toByteArray();
+        }
+    }
+
+    private void processTextRun(org.apache.poi.xwpf.usermodel.XWPFRun run, Map<String, String> placeholders) {
+        String text = run.getText(0);
+        if (text != null) {
+            String processedText = applyPlaceholders(text, placeholders);
+            if (!text.equals(processedText)) {
+                run.setText(processedText, 0);
+            }
+        }
+    }
+
+    private void processDocumentProperties(XWPFDocument document, Map<String, String> placeholders) {
+        try {
+            POIXMLProperties properties = document.getProperties();
+            if (properties != null && properties.getCoreProperties() != null) {
+                POIXMLProperties.CoreProperties core = properties.getCoreProperties();
+
+                if (core.getTitle() != null) {
+                    core.setTitle(applyPlaceholders(core.getTitle(), placeholders));
+                }
+                if (core.getDescription() != null) {
+                    core.setDescription(applyPlaceholders(core.getDescription(), placeholders));
+                }
+                if (core.getCreator() != null) {
+                    core.setCreator(applyPlaceholders(core.getCreator(), placeholders));
+                }
+            }
+        } catch (Exception e) {
+            logger.debug("Could not process document properties: {}", e.getMessage());
         }
     }
 
@@ -268,8 +290,8 @@ public class DocumentProcessor {
         }
     }
 
-    private byte[] processPdfDocument(byte[] documentBytes) {
-        logger.debug("PDF processing not implemented yet");
+    private byte[] processPdfDocument(byte[] documentBytes, Map<String, String> placeholders) {
+        logger.debug("PDF processing not implemented yet - returning original document");
         return documentBytes;
     }
 
@@ -284,13 +306,15 @@ public class DocumentProcessor {
             return text;
         }
 
-        String result = text;
-        for (Map.Entry<String, String> entry : placeholders.entrySet()) {
-            if (result.contains(entry.getKey())) {
-                result = result.replace(entry.getKey(), entry.getValue());
-            }
-        }
-        return result;
+        final String[] result = {text};
+        placeholders.entrySet().stream()
+                .sorted((e1, e2) -> Integer.compare(e2.getKey().length(), e1.getKey().length()))
+                .forEach(entry -> {
+                    if (result[0].contains(entry.getKey())) {
+                        result[0] = result[0].replace(entry.getKey(), entry.getValue());
+                    }
+                });
+        return result[0];
     }
 
     private String getFileExtension(String filename) {
@@ -305,11 +329,13 @@ public class DocumentProcessor {
 
     public boolean isSupportedDocument(String filename) {
         String extension = getFileExtension(filename).toLowerCase();
-        return switch (extension) {
-            case ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".pdf",
-                 ".txt", ".md", ".json", ".xml", ".html", ".css",
-                 ".js", ".properties", ".yml", ".yaml" -> true;
-            default -> false;
-        };
+        return OFFICE_EXTENSIONS.contains(extension) ||
+               TEXT_DOCUMENT_EXTENSIONS.contains(extension) ||
+               PDF_EXTENSIONS.contains(extension);
+    }
+
+    public void clearCache() {
+        documentCache.clear();
+        logger.debug("Document processor cache cleared");
     }
 }

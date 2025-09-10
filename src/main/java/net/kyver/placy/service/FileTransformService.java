@@ -18,10 +18,8 @@ import java.lang.reflect.Type;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Objects;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.TimeUnit;
 
 @Service
 public class FileTransformService {
@@ -33,7 +31,6 @@ public class FileTransformService {
     private final ImageProcessor imageProcessor;
     private final DocumentProcessor documentProcessor;
     private final Gson gson;
-
     private final ExecutorService executorService;
 
     @Autowired
@@ -50,8 +47,7 @@ public class FileTransformService {
         this.gson = new Gson();
 
         this.executorService = Executors.newFixedThreadPool(
-            Math.max(2, Runtime.getRuntime().availableProcessors() / 2)
-        );
+            Math.max(2, Runtime.getRuntime().availableProcessors() - 1));
 
         logger.info("FileTransformService initialized with comprehensive file type support");
     }
@@ -69,46 +65,40 @@ public class FileTransformService {
         }
 
         byte[] fileBytes = file.getBytes();
-
         return routeToProcessor(fileBytes, filename, placeholders);
     }
 
     private byte[] routeToProcessor(byte[] fileBytes, String filename, Map<String, String> placeholders) throws IOException {
         String extension = fileTypeDetector.getFileExtension(filename);
 
-        if (fileTypeDetector.isArchiveFile(filename)) {
-            logger.debug("Processing as archive file: {}", extension);
-            return archiveProcessor.processArchive(fileBytes, filename, placeholders);
-        }
-
-        if (fileTypeDetector.getImageExtensions().contains(extension)) {
-            logger.debug("Processing as image file: {}", extension);
-            return imageProcessor.processImage(fileBytes, filename, placeholders);
-        }
-
-        if (documentProcessor.isSupportedDocument(filename)) {
-            logger.debug("Processing as document file: {}", extension);
-            return documentProcessor.processDocument(fileBytes, filename, placeholders);
-        }
-
-        if (fileTypeDetector.isTextFile(filename, fileBytes)) {
-            logger.debug("Processing as text file: {}", extension);
-            return streamProcessor.transformTextStream(fileBytes, placeholders);
-        }
-
-        String supportedTypes = String.join(", ", fileTypeDetector.getAllSupportedExtensions());
-        throw new IllegalArgumentException(
-            String.format("Unsupported file type: %s. Supported types: %s", extension, supportedTypes));
-    }
-
-    public CompletableFuture<byte[]> transformFileAsync(MultipartFile file, Map<String, String> placeholders) {
-        return CompletableFuture.supplyAsync(() -> {
-            try {
-                return transformFile(file, placeholders);
-            } catch (IOException e) {
-                throw new RuntimeException("Failed to transform file asynchronously", e);
+        try {
+            if (fileTypeDetector.isArchiveFile(filename)) {
+                logger.debug("Processing as archive file: {}", extension);
+                return archiveProcessor.processArchive(fileBytes, filename, placeholders);
             }
-        }, executorService);
+
+            if (fileTypeDetector.getImageExtensions().contains(extension)) {
+                logger.debug("Processing as image file: {}", extension);
+                return imageProcessor.processImage(fileBytes, filename, placeholders);
+            }
+
+            if (documentProcessor.isSupportedDocument(filename)) {
+                logger.debug("Processing as document file: {}", extension);
+                return documentProcessor.processDocument(fileBytes, filename, placeholders);
+            }
+
+            if (fileTypeDetector.isTextFile(filename, fileBytes)) {
+                logger.debug("Processing as text file: {}", extension);
+                return streamProcessor.transformTextStream(fileBytes, placeholders);
+            }
+
+            String supportedTypes = String.join(", ", fileTypeDetector.getAllSupportedExtensions());
+            throw new IllegalArgumentException(
+                String.format("Unsupported file type: %s. Supported types: %s", extension, supportedTypes));
+        } catch (Exception e) {
+            logger.error("Error processing file {}: {}", filename, e.getMessage(), e);
+            throw new IOException("Failed to process file: " + filename, e);
+        }
     }
 
     public Map<String, String> parsePlaceholders(String json) {
@@ -143,5 +133,12 @@ public class FileTransformService {
 
     public boolean isSupportedFileType(String filename) {
         return fileTypeDetector.isSupportedFileType(filename);
+    }
+
+    public void shutdown() {
+        if (executorService != null && !executorService.isShutdown()) {
+            executorService.shutdown();
+            logger.info("FileTransformService executor shutdown");
+        }
     }
 }
