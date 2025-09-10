@@ -43,6 +43,12 @@ public class Application {
             logger.info("🔓 SECRET_KEY validation is DISABLED - API requests do not require authentication");
         }
 
+        if (environmentSetup.isAsyncProcessingEnabled()) {
+            logger.info("⚡ ASYNC_PROCESSING is ENABLED - files will be processed concurrently for better performance");
+        } else {
+            logger.info("🐌 ASYNC_PROCESSING is DISABLED - files will be processed synchronously (set ASYNC_PROCESSING=true for better performance)");
+        }
+
         logger.info("=================================================================");
     }
 }

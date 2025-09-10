@@ -1,5 +1,6 @@
 package net.kyver.placy.service.archive;
 
+import net.kyver.placy.config.EnvironmentSetup;
 import net.kyver.placy.service.file.FileTypeDetector;
 import net.kyver.placy.service.file.StreamProcessor;
 import net.kyver.placy.service.image.ImageProcessor;
@@ -7,10 +8,15 @@ import net.kyver.placy.service.document.DocumentProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
 import java.util.*;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 import java.util.zip.*;
 import java.util.jar.*;
 
@@ -23,18 +29,24 @@ public class ArchiveProcessor {
     private final ClassProcessor classProcessor;
     private final ImageProcessor imageProcessor;
     private final DocumentProcessor documentProcessor;
+    private final EnvironmentSetup environmentSetup;
+    private final Executor fileProcessingExecutor;
 
     @Autowired
     public ArchiveProcessor(FileTypeDetector fileTypeDetector,
                             StreamProcessor streamProcessor,
                             ClassProcessor classProcessor,
                             ImageProcessor imageProcessor,
-                            DocumentProcessor documentProcessor) {
+                            DocumentProcessor documentProcessor,
+                            EnvironmentSetup environmentSetup,
+                            @Qualifier("fileProcessingExecutor") Executor fileProcessingExecutor) {
         this.fileTypeDetector = fileTypeDetector;
         this.streamProcessor = streamProcessor;
         this.classProcessor = classProcessor;
         this.imageProcessor = imageProcessor;
         this.documentProcessor = documentProcessor;
+        this.environmentSetup = environmentSetup;
+        this.fileProcessingExecutor = fileProcessingExecutor;
     }
 
     public byte[] processArchive(byte[] archiveBytes, String filename, Map<String, String> placeholders) {
@@ -61,7 +73,7 @@ public class ArchiveProcessor {
     }
 
     private byte[] processJarArchive(byte[] jarBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Processing JAR archive of {} bytes", jarBytes.length);
+        logger.debug("Processing JAR archive of {} bytes with async={}", jarBytes.length, environmentSetup.isAsyncProcessingEnabled());
 
         try (ByteArrayInputStream input = new ByteArrayInputStream(jarBytes);
              JarInputStream jarIn = new JarInputStream(input);
@@ -73,9 +85,10 @@ public class ArchiveProcessor {
                     new JarOutputStream(output, manifest) :
                     new JarOutputStream(output)) {
 
-                JarEntry entry;
-                while ((entry = jarIn.getNextJarEntry()) != null) {
-                    processJarEntry(jarIn, jarOut, entry, placeholders);
+                if (environmentSetup.isAsyncProcessingEnabled()) {
+                    processJarEntriesAsync(jarIn, jarOut, placeholders);
+                } else {
+                    processJarEntriesSync(jarIn, jarOut, placeholders);
                 }
 
                 jarOut.finish();
@@ -88,16 +101,17 @@ public class ArchiveProcessor {
     }
 
     private byte[] processZipArchive(byte[] zipBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Processing ZIP archive of {} bytes", zipBytes.length);
+        logger.debug("Processing ZIP archive of {} bytes with async={}", zipBytes.length, environmentSetup.isAsyncProcessingEnabled());
 
         try (ByteArrayInputStream input = new ByteArrayInputStream(zipBytes);
              ZipInputStream zipIn = new ZipInputStream(input);
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
 
             try (ZipOutputStream zipOut = new ZipOutputStream(output)) {
-                ZipEntry entry;
-                while ((entry = zipIn.getNextEntry()) != null) {
-                    processZipEntry(zipIn, zipOut, entry, placeholders);
+                if (environmentSetup.isAsyncProcessingEnabled()) {
+                    processZipEntriesAsync(zipIn, zipOut, placeholders);
+                } else {
+                    processZipEntriesSync(zipIn, zipOut, placeholders);
                 }
 
                 zipOut.finish();
@@ -107,6 +121,127 @@ public class ArchiveProcessor {
                 return result;
             }
         }
+    }
+
+    private void processJarEntriesAsync(JarInputStream jarIn, JarOutputStream jarOut, Map<String, String> placeholders) throws IOException {
+        List<JarEntryData> entries = new ArrayList<>();
+
+        JarEntry entry;
+        while ((entry = jarIn.getNextJarEntry()) != null) {
+            byte[] data = entry.isDirectory() ? new byte[0] : readEntryData(jarIn);
+            entries.add(new JarEntryData(entry, data));
+        }
+
+        if (entries.isEmpty()) {
+            return;
+        }
+
+        Map<String, CompletableFuture<byte[]>> futures = new ConcurrentHashMap<>();
+
+        for (JarEntryData entryData : entries) {
+            if (!entryData.entry.isDirectory()) {
+                String entryName = entryData.entry.getName();
+                futures.put(entryName, CompletableFuture.supplyAsync(() ->
+                    processEntryContent(entryName, entryData.data, placeholders), fileProcessingExecutor));
+            }
+        }
+
+        for (JarEntryData entryData : entries) {
+            JarEntry originalEntry = entryData.entry;
+
+            if (originalEntry.isDirectory()) {
+                JarEntry newEntry = new JarEntry(originalEntry.getName());
+                copyJarEntryMetadata(originalEntry, newEntry);
+                jarOut.putNextEntry(newEntry);
+                jarOut.closeEntry();
+            } else {
+                String entryName = originalEntry.getName();
+                byte[] processedData = futures.get(entryName).join();
+
+                JarEntry newEntry = new JarEntry(originalEntry.getName());
+                copyJarEntryMetadata(originalEntry, newEntry);
+                newEntry.setSize(processedData.length);
+
+                if (newEntry.getMethod() == ZipEntry.STORED) {
+                    CRC32 crc = new CRC32();
+                    crc.update(processedData);
+                    newEntry.setCrc(crc.getValue());
+                }
+
+                jarOut.putNextEntry(newEntry);
+                jarOut.write(processedData);
+                jarOut.closeEntry();
+            }
+        }
+
+        logger.debug("Processed {} JAR entries asynchronously", entries.size());
+    }
+
+    private void processZipEntriesAsync(ZipInputStream zipIn, ZipOutputStream zipOut, Map<String, String> placeholders) throws IOException {
+        List<ZipEntryData> entries = new ArrayList<>();
+
+        ZipEntry entry;
+        while ((entry = zipIn.getNextEntry()) != null) {
+            byte[] data = entry.isDirectory() ? new byte[0] : readEntryData(zipIn);
+            entries.add(new ZipEntryData(entry, data));
+        }
+
+        if (entries.isEmpty()) {
+            return;
+        }
+
+        Map<String, CompletableFuture<byte[]>> futures = new ConcurrentHashMap<>();
+
+        for (ZipEntryData entryData : entries) {
+            if (!entryData.entry.isDirectory()) {
+                String entryName = entryData.entry.getName();
+                futures.put(entryName, CompletableFuture.supplyAsync(() ->
+                    processEntryContent(entryName, entryData.data, placeholders), fileProcessingExecutor));
+            }
+        }
+
+        for (ZipEntryData entryData : entries) {
+            ZipEntry originalEntry = entryData.entry;
+
+            if (originalEntry.isDirectory()) {
+                ZipEntry newEntry = new ZipEntry(originalEntry.getName());
+                copyZipEntryMetadata(originalEntry, newEntry);
+                zipOut.putNextEntry(newEntry);
+                zipOut.closeEntry();
+            } else {
+                String entryName = originalEntry.getName();
+                byte[] processedData = futures.get(entryName).join();
+
+                ZipEntry newEntry = new ZipEntry(originalEntry.getName());
+                copyZipEntryMetadata(originalEntry, newEntry);
+
+                zipOut.putNextEntry(newEntry);
+                zipOut.write(processedData);
+                zipOut.closeEntry();
+            }
+        }
+
+        logger.debug("Processed {} ZIP entries asynchronously", entries.size());
+    }
+
+    private void processJarEntriesSync(JarInputStream jarIn, JarOutputStream jarOut, Map<String, String> placeholders) throws IOException {
+        JarEntry entry;
+        int entryCount = 0;
+        while ((entry = jarIn.getNextJarEntry()) != null) {
+            processJarEntry(jarIn, jarOut, entry, placeholders);
+            entryCount++;
+        }
+        logger.debug("Processed {} JAR entries synchronously", entryCount);
+    }
+
+    private void processZipEntriesSync(ZipInputStream zipIn, ZipOutputStream zipOut, Map<String, String> placeholders) throws IOException {
+        ZipEntry entry;
+        int entryCount = 0;
+        while ((entry = zipIn.getNextEntry()) != null) {
+            processZipEntry(zipIn, zipOut, entry, placeholders);
+            entryCount++;
+        }
+        logger.debug("Processed {} ZIP entries synchronously", entryCount);
     }
 
     private void processJarEntry(JarInputStream jarIn, JarOutputStream jarOut,
@@ -121,13 +256,12 @@ public class ArchiveProcessor {
         }
 
         byte[] entryData = readEntryData(jarIn);
-
         byte[] processedData = processEntryContent(originalEntry.getName(), entryData, placeholders);
 
         JarEntry newEntry = new JarEntry(originalEntry.getName());
         copyJarEntryMetadata(originalEntry, newEntry);
-
         newEntry.setSize(processedData.length);
+
         if (newEntry.getMethod() == ZipEntry.STORED) {
             CRC32 crc = new CRC32();
             crc.update(processedData);
@@ -151,7 +285,6 @@ public class ArchiveProcessor {
         }
 
         byte[] entryData = readEntryData(zipIn);
-
         byte[] processedData = processEntryContent(originalEntry.getName(), entryData, placeholders);
 
         ZipEntry newEntry = new ZipEntry(originalEntry.getName());
@@ -254,4 +387,25 @@ public class ArchiveProcessor {
 
         return filename.substring(lastDot);
     }
+
+    private static class JarEntryData {
+        final JarEntry entry;
+        final byte[] data;
+
+        JarEntryData(JarEntry entry, byte[] data) {
+            this.entry = entry;
+            this.data = data;
+        }
+    }
+
+    private static class ZipEntryData {
+        final ZipEntry entry;
+        final byte[] data;
+
+        ZipEntryData(ZipEntry entry, byte[] data) {
+            this.entry = entry;
+            this.data = data;
+        }
+    }
 }
+

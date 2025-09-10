@@ -21,6 +21,7 @@
 - **🔄 Parallel Processing**: Automatic parallel processing for files >10MB
 - **🧠 Memory Efficient**: Processes files in chunks to minimize memory footprint
 - **🔧 Smart Buffering**: Dynamic buffer sizing based on file size
+- **⚡ Asynchronous Processing**: Optional concurrent file processing for maximum throughput
 
 ### **Enterprise Security**
 - **🔐 API Key Authentication**: Optional SECRET_KEY validation
@@ -181,6 +182,34 @@ Large files are automatically processed in parallel chunks for maximum performan
 ```bash
 git clone https://github.com/yourusername/placy.git
 cd placy
+### Asynchronous Processing
+Placy supports high-performance asynchronous file processing for optimal throughput:
+
+#### **Async Processing Mode** (`ASYNC_PROCESSING=true`)
+- **Concurrent Processing**: Multiple files processed simultaneously using thread pools
+- **Non-blocking Operations**: API calls return immediately with processing handled asynchronously
+- **Intelligent Thread Management**: Dynamic thread pool sizing based on system capabilities
+- **Graceful Degradation**: Falls back to synchronous processing if thread pool is saturated
+- **Error Isolation**: Individual file errors don't affect other files in batch operations
+
+#### **Synchronous Processing Mode** (Default)
+- **Sequential Processing**: Files processed one at a time in order
+- **Predictable Resource Usage**: Lower memory footprint and CPU usage
+- **Simplified Error Handling**: Immediate error reporting without async complexity
+
+#### **Performance Characteristics**
+| Processing Mode | Single File | Multiple Files | Resource Usage | Throughput |
+|----------------|-------------|----------------|----------------|------------|
+| Synchronous    | Standard    | Sequential     | Low            | Moderate   |
+| Asynchronous   | Standard    | Concurrent     | Higher         | High       |
+
+#### **Thread Pool Configuration**
+- **Core Pool Size**: `max(2, availableProcessors / 2)`
+- **Max Pool Size**: `max(4, availableProcessors * 2)`
+- **Queue Capacity**: 100 tasks
+- **Keep Alive Time**: 60 seconds
+- **Rejection Policy**: Graceful fallback to synchronous execution
+
 ./gradlew build
 ```
 
