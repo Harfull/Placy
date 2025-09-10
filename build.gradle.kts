@@ -27,13 +27,32 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-actuator")
 
     implementation("com.google.code.gson:gson:2.10.1")
+    implementation("org.json:json:20240303")
+
     implementation("org.ow2.asm:asm:9.6")
     implementation("org.ow2.asm:asm-commons:9.6")
-    implementation("org.json:json:20240303")
+
+    implementation("org.apache.poi:poi:5.2.4")
+    implementation("org.apache.poi:poi-ooxml:5.2.4")
+    implementation("org.apache.poi:poi-scratchpad:5.2.4")
+
+    implementation("org.apache.commons:commons-compress:1.24.0")
+    implementation("org.tukaani:xz:1.9")
+
+    implementation("com.twelvemonkeys.imageio:imageio-core:3.10.1")
+    implementation("com.twelvemonkeys.imageio:imageio-jpeg:3.10.1")
+    implementation("com.twelvemonkeys.imageio:imageio-tiff:3.10.1")
+    implementation("com.twelvemonkeys.imageio:imageio-metadata:3.10.1")
+
+    implementation("org.apache.pdfbox:pdfbox:3.0.1")
+
+    testImplementation("org.springframework.boot:spring-boot-starter-test")
+    testImplementation("org.junit.jupiter:junit-jupiter")
+    testImplementation("org.mockito:mockito-core")
 }
 
 application {
-    mainClass.set("net.kyver.jarplaceholders.Application")
+    mainClass.set("net.kyver.placy.Application")
 }
 
 tasks.withType<JavaCompile> {
