@@ -24,14 +24,14 @@ public class AsyncConfig implements AsyncConfigurer {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 
         int availableProcessors = Runtime.getRuntime().availableProcessors();
-        int corePoolSize = Math.max(2, availableProcessors / 2);
-        int maxPoolSize = Math.max(4, availableProcessors * 2);
+        int corePoolSize = Math.max(4, availableProcessors);
+        int maxPoolSize = Math.max(8, availableProcessors * 4);
 
         executor.setCorePoolSize(corePoolSize);
         executor.setMaxPoolSize(maxPoolSize);
-        executor.setQueueCapacity(100);
+        executor.setQueueCapacity(2000);
         executor.setThreadNamePrefix("AsyncFileProcessor-");
-        executor.setKeepAliveSeconds(60);
+        executor.setKeepAliveSeconds(30);
         executor.setAllowCoreThreadTimeOut(true);
 
         executor.setRejectedExecutionHandler(new RejectedExecutionHandler() {
@@ -39,11 +39,13 @@ public class AsyncConfig implements AsyncConfigurer {
             public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
                 logger.warn("File processing task rejected. Queue full. Active: {}, Pool size: {}, Queue size: {}",
                            executor.getActiveCount(), executor.getPoolSize(), executor.getQueue().size());
-                try {
-                    executor.getQueue().put(r);
-                } catch (InterruptedException e) {
-                    Thread.currentThread().interrupt();
-                    logger.error("Thread interrupted while waiting to queue rejected task", e);
+                if (!executor.isShutdown()) {
+                    try {
+                        r.run();
+                        logger.debug("Executed rejected task synchronously as fallback");
+                    } catch (Exception e) {
+                        logger.error("Failed to execute rejected task synchronously", e);
+                    }
                 }
             }
         });
@@ -51,7 +53,7 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.initialize();
 
         logger.info("Initialized async file processing executor - Core: {}, Max: {}, Queue: {}",
-                   corePoolSize, maxPoolSize, 100);
+                   corePoolSize, maxPoolSize, 2000);
 
         return executor;
     }

@@ -31,9 +31,15 @@ public class ClassProcessor {
 
         return classCache.computeIfAbsent(cacheKey, key -> {
             try {
-                return transformClass(classBytes, replacements);
+                byte[] transformedBytes = transformClass(classBytes, replacements);
+                if (transformedBytes != null && transformedBytes.length > 0) {
+                    return transformedBytes;
+                } else {
+                    logger.warn("Class transformation returned empty/null result, using original bytes");
+                    return classBytes;
+                }
             } catch (Exception e) {
-                logger.warn("Failed to transform class, returning original bytes: {}", e.getMessage());
+                logger.error("Class transformation failed: {}, using original bytes", e.getMessage());
                 return classBytes;
             }
         });

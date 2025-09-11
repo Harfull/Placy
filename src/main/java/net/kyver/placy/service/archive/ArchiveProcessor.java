@@ -9,7 +9,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
-import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Component;
 
 import java.io.*;
@@ -207,10 +206,33 @@ public class ArchiveProcessor {
                 zipOut.closeEntry();
             } else {
                 String entryName = originalEntry.getName();
+                byte[] originalData = entryData.data;
                 byte[] processedData = futures.get(entryName).join();
 
                 ZipEntry newEntry = new ZipEntry(originalEntry.getName());
-                copyZipEntryMetadata(originalEntry, newEntry);
+
+                newEntry.setTime(originalEntry.getTime());
+                if (originalEntry.getComment() != null) {
+                    newEntry.setComment(originalEntry.getComment());
+                }
+                if (originalEntry.getExtra() != null) {
+                    newEntry.setExtra(originalEntry.getExtra());
+                }
+
+                if (originalEntry.getMethod() == ZipEntry.STORED) {
+                    if (processedData.length != originalData.length) {
+                        newEntry.setMethod(ZipEntry.DEFLATED);
+                    } else {
+                        newEntry.setMethod(ZipEntry.STORED);
+                        CRC32 crc = new CRC32();
+                        crc.update(processedData);
+                        newEntry.setCrc(crc.getValue());
+                        newEntry.setSize(processedData.length);
+                        newEntry.setCompressedSize(processedData.length);
+                    }
+                } else {
+                    newEntry.setMethod(originalEntry.getMethod());
+                }
 
                 zipOut.putNextEntry(newEntry);
                 zipOut.write(processedData);
@@ -246,7 +268,16 @@ public class ArchiveProcessor {
 
         if (originalEntry.isDirectory()) {
             JarEntry newEntry = new JarEntry(originalEntry.getName());
-            copyJarEntryMetadata(originalEntry, newEntry);
+            newEntry.setTime(originalEntry.getTime());
+            if (originalEntry.getComment() != null) {
+                newEntry.setComment(originalEntry.getComment());
+            }
+            if (originalEntry.getExtra() != null) {
+                newEntry.setExtra(originalEntry.getExtra());
+            }
+            if (originalEntry.getAttributes() != null) {
+                newEntry.getAttributes().putAll(originalEntry.getAttributes());
+            }
             jarOut.putNextEntry(newEntry);
             jarOut.closeEntry();
             return;
@@ -256,18 +287,44 @@ public class ArchiveProcessor {
         byte[] processedData = processEntryContent(originalEntry.getName(), entryData, placeholders);
 
         JarEntry newEntry = new JarEntry(originalEntry.getName());
-        copyJarEntryMetadata(originalEntry, newEntry);
-        newEntry.setSize(processedData.length);
 
-        if (newEntry.getMethod() == ZipEntry.STORED) {
-            CRC32 crc = new CRC32();
-            crc.update(processedData);
-            newEntry.setCrc(crc.getValue());
+        newEntry.setTime(originalEntry.getTime());
+        if (originalEntry.getComment() != null) {
+            newEntry.setComment(originalEntry.getComment());
+        }
+        if (originalEntry.getExtra() != null) {
+            newEntry.setExtra(originalEntry.getExtra());
+        }
+        if (originalEntry.getAttributes() != null) {
+            newEntry.getAttributes().putAll(originalEntry.getAttributes());
         }
 
-        jarOut.putNextEntry(newEntry);
-        jarOut.write(processedData);
-        jarOut.closeEntry();
+        newEntry.setMethod(ZipEntry.DEFLATED);
+
+        try {
+            jarOut.putNextEntry(newEntry);
+            jarOut.write(processedData);
+            jarOut.closeEntry();
+        } catch (ZipException e) {
+            logger.warn("Failed to write JAR entry '{}', trying with minimal entry: {}",
+                    originalEntry.getName(), e.getMessage());
+
+            JarEntry fallbackEntry = new JarEntry(originalEntry.getName());
+            fallbackEntry.setTime(System.currentTimeMillis());
+            fallbackEntry.setMethod(ZipEntry.DEFLATED);
+            if (originalEntry.getAttributes() != null) {
+                fallbackEntry.getAttributes().putAll(originalEntry.getAttributes());
+            }
+
+            try {
+                jarOut.putNextEntry(fallbackEntry);
+                jarOut.write(processedData);
+                jarOut.closeEntry();
+            } catch (ZipException e2) {
+                logger.error("Failed to write JAR entry '{}' even with minimal entry, skipping: {}",
+                        originalEntry.getName(), e2.getMessage());
+            }
+        }
     }
 
     private void processZipEntry(ZipInputStream zipIn, ZipOutputStream zipOut,
@@ -285,11 +342,38 @@ public class ArchiveProcessor {
         byte[] processedData = processEntryContent(originalEntry.getName(), entryData, placeholders);
 
         ZipEntry newEntry = new ZipEntry(originalEntry.getName());
-        copyZipEntryMetadata(originalEntry, newEntry);
 
-        zipOut.putNextEntry(newEntry);
-        zipOut.write(processedData);
-        zipOut.closeEntry();
+        newEntry.setTime(originalEntry.getTime());
+        if (originalEntry.getComment() != null) {
+            newEntry.setComment(originalEntry.getComment());
+        }
+        if (originalEntry.getExtra() != null) {
+            newEntry.setExtra(originalEntry.getExtra());
+        }
+
+        newEntry.setMethod(ZipEntry.DEFLATED);
+
+        try {
+            zipOut.putNextEntry(newEntry);
+            zipOut.write(processedData);
+            zipOut.closeEntry();
+        } catch (ZipException e) {
+            logger.warn("Failed to write ZIP entry '{}' with original method, trying with minimal entry: {}",
+                    originalEntry.getName(), e.getMessage());
+
+            ZipEntry fallbackEntry = new ZipEntry(originalEntry.getName());
+            fallbackEntry.setTime(System.currentTimeMillis());
+            fallbackEntry.setMethod(ZipEntry.DEFLATED);
+
+            try {
+                zipOut.putNextEntry(fallbackEntry);
+                zipOut.write(processedData);
+                zipOut.closeEntry();
+            } catch (ZipException e2) {
+                logger.error("Failed to write ZIP entry '{}' even with minimal entry, skipping: {}",
+                        originalEntry.getName(), e2.getMessage());
+            }
+        }
     }
 
     private byte[] processEntryContent(String entryName, byte[] originalData, Map<String, String> placeholders) {
@@ -331,7 +415,6 @@ public class ArchiveProcessor {
 
     private void copyJarEntryMetadata(JarEntry source, JarEntry target) throws IOException {
         target.setTime(source.getTime());
-        target.setMethod(source.getMethod());
 
         if (source.getComment() != null) {
             target.setComment(source.getComment());
@@ -347,7 +430,6 @@ public class ArchiveProcessor {
 
     private void copyZipEntryMetadata(ZipEntry source, ZipEntry target) {
         target.setTime(source.getTime());
-        target.setMethod(source.getMethod());
 
         if (source.getComment() != null) {
             target.setComment(source.getComment());
