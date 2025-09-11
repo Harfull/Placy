@@ -1,0 +1,12 @@
+.git
+.gitignore
+.gradle/
+build/
+out/
+bin/
+.idea/
+*.iml
+*.log
+.DS_Store
+node_modules/
+
