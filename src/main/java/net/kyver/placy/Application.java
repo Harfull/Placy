@@ -46,6 +46,17 @@ public class Application {
 
             Logger.success("Placy started successfully");
             Logger.info("Running on: http://localhost:" + port + "/");
+
+            if (EnvironmentSetup.isAsyncProcessingEnabled()) {
+                Logger.info("Asynchronous file processing is ENABLED");
+            } else {
+                Logger.info("Asynchronous file processing is DISABLED");
+            }
+            if (EnvironmentSetup.getSecretKey() != null) {
+                Logger.info("Secret key validation is ENABLED");
+            } else {
+                Logger.info("Secret key validation is DISABLED");
+            }
         } catch (Exception e) {
             Logger.error("Failed to start Placy Transform Service: ", e);
             System.exit(1);
