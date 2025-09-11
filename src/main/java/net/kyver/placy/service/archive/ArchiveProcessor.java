@@ -132,15 +132,11 @@ public class ArchiveProcessor {
             return;
         }
 
-        Map<String, CompletableFuture<byte[]>> futures = new ConcurrentHashMap<>();
+        List<JarEntryData> filesToProcess = entries.stream()
+                .filter(e -> !e.entry.isDirectory())
+                .toList();
 
-        for (JarEntryData entryData : entries) {
-            if (!entryData.entry.isDirectory()) {
-                String entryName = entryData.entry.getName();
-                futures.put(entryName, CompletableFuture.supplyAsync(() ->
-                    processEntryContent(entryName, entryData.data, placeholders), fileProcessingExecutor));
-            }
-        }
+        Map<String, byte[]> processedData = processBatchedEntries(filesToProcess, placeholders);
 
         for (JarEntryData entryData : entries) {
             JarEntry originalEntry = entryData.entry;
@@ -152,20 +148,20 @@ public class ArchiveProcessor {
                 jarOut.closeEntry();
             } else {
                 String entryName = originalEntry.getName();
-                byte[] processedData = futures.get(entryName).join();
+                byte[] processedBytes = processedData.getOrDefault(entryName, entryData.data);
 
                 JarEntry newEntry = new JarEntry(originalEntry.getName());
                 copyJarEntryMetadata(originalEntry, newEntry);
-                newEntry.setSize(processedData.length);
+                newEntry.setSize(processedBytes.length);
 
                 if (newEntry.getMethod() == ZipEntry.STORED) {
                     CRC32 crc = new CRC32();
-                    crc.update(processedData);
+                    crc.update(processedBytes);
                     newEntry.setCrc(crc.getValue());
                 }
 
                 jarOut.putNextEntry(newEntry);
-                jarOut.write(processedData);
+                jarOut.write(processedBytes);
                 jarOut.closeEntry();
             }
         }
@@ -186,15 +182,11 @@ public class ArchiveProcessor {
             return;
         }
 
-        Map<String, CompletableFuture<byte[]>> futures = new ConcurrentHashMap<>();
+        List<ZipEntryData> filesToProcess = entries.stream()
+                .filter(e -> !e.entry.isDirectory())
+                .toList();
 
-        for (ZipEntryData entryData : entries) {
-            if (!entryData.entry.isDirectory()) {
-                String entryName = entryData.entry.getName();
-                futures.put(entryName, CompletableFuture.supplyAsync(() ->
-                    processEntryContent(entryName, entryData.data, placeholders), fileProcessingExecutor));
-            }
-        }
+        Map<String, byte[]> processedData = processBatchedZipEntries(filesToProcess, placeholders);
 
         for (ZipEntryData entryData : entries) {
             ZipEntry originalEntry = entryData.entry;
@@ -207,7 +199,7 @@ public class ArchiveProcessor {
             } else {
                 String entryName = originalEntry.getName();
                 byte[] originalData = entryData.data;
-                byte[] processedData = futures.get(entryName).join();
+                byte[] processedBytes = processedData.getOrDefault(entryName, originalData);
 
                 ZipEntry newEntry = new ZipEntry(originalEntry.getName());
 
@@ -220,27 +212,103 @@ public class ArchiveProcessor {
                 }
 
                 if (originalEntry.getMethod() == ZipEntry.STORED) {
-                    if (processedData.length != originalData.length) {
+                    if (processedBytes.length != originalData.length) {
                         newEntry.setMethod(ZipEntry.DEFLATED);
                     } else {
                         newEntry.setMethod(ZipEntry.STORED);
                         CRC32 crc = new CRC32();
-                        crc.update(processedData);
+                        crc.update(processedBytes);
                         newEntry.setCrc(crc.getValue());
-                        newEntry.setSize(processedData.length);
-                        newEntry.setCompressedSize(processedData.length);
+                        newEntry.setSize(processedBytes.length);
+                        newEntry.setCompressedSize(processedBytes.length);
                     }
                 } else {
                     newEntry.setMethod(originalEntry.getMethod());
                 }
 
                 zipOut.putNextEntry(newEntry);
-                zipOut.write(processedData);
+                zipOut.write(processedBytes);
                 zipOut.closeEntry();
             }
         }
 
         logger.debug("Processed {} ZIP entries asynchronously", entries.size());
+    }
+
+    private Map<String, byte[]> processBatchedEntries(List<JarEntryData> entries, Map<String, String> placeholders) {
+        Map<String, byte[]> results = new ConcurrentHashMap<>();
+
+        int availableThreads = Math.max(2, Runtime.getRuntime().availableProcessors() / 4);
+        int batchSize = Math.max(10, entries.size() / availableThreads);
+
+        List<List<JarEntryData>> batches = partitionList(entries, batchSize);
+        List<CompletableFuture<Void>> batchFutures = new ArrayList<>();
+
+        logger.debug("Processing {} entries in {} batches with {} threads",
+                    entries.size(), batches.size(), availableThreads);
+
+        for (List<JarEntryData> batch : batches) {
+            CompletableFuture<Void> batchFuture = CompletableFuture.runAsync(() -> {
+                for (JarEntryData entryData : batch) {
+                    try {
+                        String entryName = entryData.entry.getName();
+                        byte[] processedData = processEntryContent(entryName, entryData.data, placeholders);
+                        results.put(entryName, processedData);
+                    } catch (Exception e) {
+                        logger.warn("Failed to process entry {}: {}", entryData.entry.getName(), e.getMessage());
+                        results.put(entryData.entry.getName(), entryData.data);
+                    }
+                }
+            }, fileProcessingExecutor);
+            batchFutures.add(batchFuture);
+        }
+
+        CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0])).join();
+
+        logger.debug("Completed processing {} entries across {} batch futures", entries.size(), batches.size());
+        return results;
+    }
+
+    private Map<String, byte[]> processBatchedZipEntries(List<ZipEntryData> entries, Map<String, String> placeholders) {
+        Map<String, byte[]> results = new ConcurrentHashMap<>();
+
+        int availableThreads = Math.max(2, Runtime.getRuntime().availableProcessors() / 4);
+        int batchSize = Math.max(10, entries.size() / availableThreads);
+
+        List<List<ZipEntryData>> batches = partitionList(entries, batchSize);
+        List<CompletableFuture<Void>> batchFutures = new ArrayList<>();
+
+        logger.debug("Processing {} entries in {} batches with {} threads",
+                    entries.size(), batches.size(), availableThreads);
+
+        for (List<ZipEntryData> batch : batches) {
+            CompletableFuture<Void> batchFuture = CompletableFuture.runAsync(() -> {
+                for (ZipEntryData entryData : batch) {
+                    try {
+                        String entryName = entryData.entry.getName();
+                        byte[] processedData = processEntryContent(entryName, entryData.data, placeholders);
+                        results.put(entryName, processedData);
+                    } catch (Exception e) {
+                        logger.warn("Failed to process entry {}: {}", entryData.entry.getName(), e.getMessage());
+                        results.put(entryData.entry.getName(), entryData.data);
+                    }
+                }
+            }, fileProcessingExecutor);
+            batchFutures.add(batchFuture);
+        }
+
+        CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0])).join();
+
+        logger.debug("Completed processing {} entries across {} batch futures", entries.size(), batches.size());
+        return results;
+    }
+
+    private <T> List<List<T>> partitionList(List<T> list, int batchSize) {
+        List<List<T>> partitions = new ArrayList<>();
+        for (int i = 0; i < list.size(); i += batchSize) {
+            partitions.add(list.subList(i, Math.min(i + batchSize, list.size())));
+        }
+        return partitions;
     }
 
     private void processJarEntriesSync(JarInputStream jarIn, JarOutputStream jarOut, Map<String, String> placeholders) throws IOException {
@@ -378,25 +446,41 @@ public class ArchiveProcessor {
 
     private byte[] processEntryContent(String entryName, byte[] originalData, Map<String, String> placeholders) {
         try {
+            if (originalData == null || originalData.length == 0) {
+                logger.warn("Entry {} has no data, skipping processing", entryName);
+                return originalData;
+            }
+
             if (isArchiveFile(entryName)) {
-                logger.debug("Processing nested archive: {}", entryName);
-                return processArchive(originalData, entryName, placeholders);
+                logger.debug("Processing nested archive: {} ({} bytes)", entryName, originalData.length);
+                byte[] processed = processArchive(originalData, entryName, placeholders);
+                logger.debug("Nested archive {} processed: {} -> {} bytes", entryName, originalData.length, processed.length);
+                return processed;
             }
 
             if (entryName.endsWith(".class")) {
-                return classProcessor.replacePlaceholdersInClass(originalData, placeholders);
+                logger.debug("Processing class file: {} ({} bytes)", entryName, originalData.length);
+                byte[] processed = classProcessor.replacePlaceholdersInClass(originalData, placeholders);
+                if (processed.length == 0) {
+                    logger.warn("Class processing returned empty data for {}, using original", entryName);
+                    return originalData;
+                }
+                return processed;
             } else if (isTextFile(entryName, originalData)) {
+                logger.debug("Processing text file: {} ({} bytes)", entryName, originalData.length);
                 return streamProcessor.transformTextStream(originalData, placeholders);
             } else if (isImageFile(entryName)) {
+                logger.debug("Processing image file: {} ({} bytes)", entryName, originalData.length);
                 return imageProcessor.processImage(originalData, entryName, placeholders);
             } else if (documentProcessor.isSupportedDocument(entryName)) {
+                logger.debug("Processing document: {} ({} bytes)", entryName, originalData.length);
                 return documentProcessor.processDocument(originalData, entryName, placeholders);
             }
 
             return originalData;
 
         } catch (Exception e) {
-            logger.warn("Failed to process entry {}: {}", entryName, e.getMessage());
+            logger.warn("Failed to process entry {}: {}, using original data", entryName, e.getMessage());
             return originalData;
         }
     }

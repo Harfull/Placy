@@ -10,8 +10,6 @@ import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
 
 import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionHandler;
-import java.util.concurrent.ThreadPoolExecutor;
 
 @Configuration
 @EnableAsync
@@ -24,37 +22,25 @@ public class AsyncConfig implements AsyncConfigurer {
         ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
 
         int availableProcessors = Runtime.getRuntime().availableProcessors();
-        int corePoolSize = Math.max(4, availableProcessors);
-        int maxPoolSize = Math.max(8, availableProcessors * 4);
+        int threads = Math.min(4, Math.max(2, availableProcessors / 4));
 
-        executor.setCorePoolSize(corePoolSize);
-        executor.setMaxPoolSize(maxPoolSize);
-        executor.setQueueCapacity(2000);
-        executor.setThreadNamePrefix("AsyncFileProcessor-");
+        executor.setCorePoolSize(threads);
+        executor.setMaxPoolSize(threads);
+        executor.setQueueCapacity(10);
+        executor.setThreadNamePrefix("FastProcessor-");
         executor.setKeepAliveSeconds(30);
-        executor.setAllowCoreThreadTimeOut(true);
+        executor.setAllowCoreThreadTimeOut(false);
 
-        executor.setRejectedExecutionHandler(new RejectedExecutionHandler() {
-            @Override
-            public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
-                logger.warn("File processing task rejected. Queue full. Active: {}, Pool size: {}, Queue size: {}",
-                           executor.getActiveCount(), executor.getPoolSize(), executor.getQueue().size());
-                if (!executor.isShutdown()) {
-                    try {
-                        r.run();
-                        logger.debug("Executed rejected task synchronously as fallback");
-                    } catch (Exception e) {
-                        logger.error("Failed to execute rejected task synchronously", e);
-                    }
-                }
+        executor.setRejectedExecutionHandler((r, executor1) -> {
+            if (!executor1.isShutdown()) {
+                r.run();
             }
         });
 
         executor.initialize();
 
-        logger.info("Initialized async file processing executor - Core: {}, Max: {}, Queue: {}",
-                   corePoolSize, maxPoolSize, 2000);
-
+        logger.info("High-performance executor initialized: {} threads, {} processors available",
+                   threads, availableProcessors);
         return executor;
     }
 

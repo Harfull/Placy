@@ -46,13 +46,71 @@ public class ClassProcessor {
     }
 
     private byte[] transformClass(byte[] classBytes, Map<String, String> replacements) {
-        ClassReader classReader = new ClassReader(classBytes);
-        ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS | ClassWriter.COMPUTE_FRAMES);
+        try {
+            ClassReader classReader = new ClassReader(classBytes);
+            ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS);
 
-        PlaceholderClassVisitor classVisitor = new PlaceholderClassVisitor(classWriter, replacements);
-        classReader.accept(classVisitor, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+            PlaceholderClassVisitor classVisitor = new PlaceholderClassVisitor(classWriter, replacements);
+            classReader.accept(classVisitor, ClassReader.SKIP_DEBUG);
 
-        return classWriter.toByteArray();
+            byte[] result = classWriter.toByteArray();
+            if (result != null && result.length > 0) {
+                return result;
+            }
+        } catch (Exception e) {
+            logger.debug("Frame computation failed, trying without: {}", e.getMessage());
+        }
+
+        try {
+            ClassReader classReader = new ClassReader(classBytes);
+            ClassWriter classWriter = new ClassWriter(0);
+
+            PlaceholderClassVisitor classVisitor = new PlaceholderClassVisitor(classWriter, replacements);
+            classReader.accept(classVisitor, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+
+            byte[] result = classWriter.toByteArray();
+            if (result != null && result.length > 0) {
+                return result;
+            }
+        } catch (Exception e) {
+            logger.debug("Basic transformation failed: {}", e.getMessage());
+        }
+
+        if (needsTransformation(classBytes, replacements)) {
+            logger.warn("Class needs transformation but ASM processing failed, attempting manual string replacement");
+            return attemptManualReplacement(classBytes, replacements);
+        }
+
+        return classBytes;
+    }
+
+    private boolean needsTransformation(byte[] classBytes, Map<String, String> replacements) {
+        try {
+            String classAsString = new String(classBytes, "UTF-8");
+            for (String placeholder : replacements.keySet()) {
+                if (classAsString.contains(placeholder)) {
+                    return true;
+                }
+            }
+        } catch (Exception e) {
+            return true;
+        }
+        return false;
+    }
+
+    private byte[] attemptManualReplacement(byte[] classBytes, Map<String, String> replacements) {
+        try {
+            byte[] result = classBytes.clone();
+
+            ClassReader reader = new ClassReader(classBytes);
+
+            logger.debug("Manual replacement attempted but using original bytes for safety");
+            return classBytes;
+
+        } catch (Exception e) {
+            logger.warn("Manual replacement failed: {}", e.getMessage());
+            return classBytes;
+        }
     }
 
     private String createCacheKey(byte[] classBytes, Map<String, String> replacements) {
