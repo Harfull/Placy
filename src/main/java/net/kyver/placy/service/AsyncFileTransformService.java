@@ -1,8 +1,7 @@
 package net.kyver.placy.service;
 
 import net.kyver.placy.config.EnvironmentSetup;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import net.kyver.placy.util.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.scheduling.annotation.Async;
@@ -17,24 +16,19 @@ import java.util.concurrent.Executor;
 
 @Service
 public class AsyncFileTransformService {
-    private static final Logger logger = LoggerFactory.getLogger(AsyncFileTransformService.class);
-
     private final FileTransformService fileTransformService;
-    private final EnvironmentSetup environmentSetup;
     private final Executor fileProcessingExecutor;
 
     @Autowired
     public AsyncFileTransformService(FileTransformService fileTransformService,
-                                   EnvironmentSetup environmentSetup,
                                    @Qualifier("fileProcessingExecutor") Executor fileProcessingExecutor) {
         this.fileTransformService = fileTransformService;
-        this.environmentSetup = environmentSetup;
         this.fileProcessingExecutor = fileProcessingExecutor;
     }
 
     public CompletableFuture<FileTransformResult> transformFileAsync(MultipartFile file,
                                                                     Map<String, String> placeholders) {
-        if (environmentSetup.isAsyncProcessingEnabled()) {
+        if (EnvironmentSetup.isAsyncProcessingEnabled()) {
             return processFileAsynchronously(file, placeholders);
         } else {
             return processFileSynchronously(file, placeholders);
@@ -44,7 +38,7 @@ public class AsyncFileTransformService {
     public CompletableFuture<List<FileTransformResult>> transformMultipleFiles(
             List<MultipartFile> files, Map<String, String> placeholders) {
 
-        if (!environmentSetup.isAsyncProcessingEnabled()) {
+        if (!EnvironmentSetup.isAsyncProcessingEnabled()) {
             return CompletableFuture.supplyAsync(() -> {
                 return files.stream()
                     .map(file -> {
@@ -52,7 +46,7 @@ public class AsyncFileTransformService {
                             byte[] result = fileTransformService.transformFile(file, placeholders);
                             return new FileTransformResult(file.getOriginalFilename(), result, null);
                         } catch (Exception e) {
-                            logger.error("Error processing file {}: {}", file.getOriginalFilename(), e.getMessage());
+                            Logger.error("File processing error: " + file.getOriginalFilename() + " - " + e.getMessage());
                             return new FileTransformResult(file.getOriginalFilename(), null, e);
                         }
                     })
@@ -76,22 +70,20 @@ public class AsyncFileTransformService {
         String filename = file.getOriginalFilename();
         long startTime = System.currentTimeMillis();
 
-        logger.debug("Starting async processing of file: {} (size: {} bytes)", filename, file.getSize());
+        Logger.debug("Async processing: " + filename + " (" + file.getSize() + " bytes)");
 
         try {
             byte[] result = fileTransformService.transformFile(file, placeholders);
             long duration = System.currentTimeMillis() - startTime;
 
-            logger.debug("Async processing completed for file: {} in {}ms (output size: {} bytes)",
-                        filename, duration, result.length);
+            Logger.debug("Async complete: " + filename + " (" + duration + "ms, " + result.length + " bytes)");
 
             return CompletableFuture.completedFuture(
                 new FileTransformResult(filename, result, null));
 
         } catch (Exception e) {
             long duration = System.currentTimeMillis() - startTime;
-            logger.error("Async processing failed for file: {} after {}ms: {}",
-                        filename, duration, e.getMessage(), e);
+            Logger.error("Async failed: " + filename + " (" + duration + "ms) - " + e.getMessage());
 
             return CompletableFuture.completedFuture(
                 new FileTransformResult(filename, null, e));

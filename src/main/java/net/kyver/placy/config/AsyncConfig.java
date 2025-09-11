@@ -3,7 +3,6 @@ package net.kyver.placy.config;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.aop.interceptor.AsyncUncaughtExceptionHandler;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.scheduling.annotation.AsyncConfigurer;
@@ -18,9 +17,6 @@ import java.util.concurrent.ThreadPoolExecutor;
 @EnableAsync
 public class AsyncConfig implements AsyncConfigurer {
     private static final Logger logger = LoggerFactory.getLogger(AsyncConfig.class);
-
-    @Autowired
-    private EnvironmentSetup environmentSetup;
 
     @Bean(name = "fileProcessingExecutor")
     @Override
@@ -41,24 +37,21 @@ public class AsyncConfig implements AsyncConfigurer {
         executor.setRejectedExecutionHandler(new RejectedExecutionHandler() {
             @Override
             public void rejectedExecution(Runnable r, ThreadPoolExecutor executor) {
-                logger.warn("Async file processing task rejected - queue full. Current queue size: {}, active threads: {}",
-                           executor.getQueue().size(), executor.getActiveCount());
+                logger.warn("File processing task rejected. Queue full. Active: {}, Pool size: {}, Queue size: {}",
+                           executor.getActiveCount(), executor.getPoolSize(), executor.getQueue().size());
                 try {
-                    r.run();
-                } catch (Exception e) {
-                    logger.error("Failed to execute rejected async task synchronously", e);
+                    executor.getQueue().put(r);
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                    logger.error("Thread interrupted while waiting to queue rejected task", e);
                 }
             }
         });
 
         executor.initialize();
 
-        if (environmentSetup.isAsyncProcessingEnabled()) {
-            logger.info("Async file processing ENABLED - Core pool size: {}, Max pool size: {}, Queue capacity: {}",
-                       corePoolSize, maxPoolSize, 100);
-        } else {
-            logger.info("Async file processing DISABLED - using synchronous processing");
-        }
+        logger.info("Initialized async file processing executor - Core: {}, Max: {}, Queue: {}",
+                   corePoolSize, maxPoolSize, 100);
 
         return executor;
     }

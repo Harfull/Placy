@@ -10,7 +10,7 @@ version = "1.0"
 
 java {
     toolchain {
-        languageVersion = JavaLanguageVersion.of(17)
+        languageVersion.set(JavaLanguageVersion.of(17))
     }
     sourceCompatibility = JavaVersion.VERSION_17
     targetCompatibility = JavaVersion.VERSION_17
@@ -25,6 +25,13 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-starter-validation")
     implementation("org.springframework.boot:spring-boot-starter-security")
     implementation("org.springframework.boot:spring-boot-starter-actuator")
+
+    implementation("ch.qos.logback:logback-classic:1.5.18")
+    implementation("ch.qos.logback:logback-core:1.5.18")
+    implementation("org.codehaus.janino:janino:3.1.10")
+    implementation("org.codehaus.janino:commons-compiler:3.1.10")
+
+    implementation("org.slf4j:jul-to-slf4j:2.0.16")
 
     implementation("com.google.code.gson:gson:2.10.1")
     implementation("org.json:json:20240303")
@@ -51,6 +58,11 @@ dependencies {
     testImplementation("org.mockito:mockito-core")
 }
 
+configurations.all {
+    exclude(group = "org.springframework.boot", module = "spring-boot-starter-logging")
+    exclude(group = "org.apache.logging.log4j")
+}
+
 application {
     mainClass.set("net.kyver.placy.Application")
 }
@@ -58,11 +70,6 @@ application {
 tasks.withType<JavaCompile> {
     options.release.set(17)
     options.encoding = "UTF-8"
-}
-
-tasks.test {
-    useJUnitPlatform()
-    jvmArgs("--add-opens", "java.base/java.lang=ALL-UNNAMED")
 }
 
 tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {

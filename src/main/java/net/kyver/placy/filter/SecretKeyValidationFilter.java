@@ -7,7 +7,6 @@ import jakarta.servlet.http.HttpServletResponse;
 import net.kyver.placy.config.EnvironmentSetup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 import org.springframework.web.filter.OncePerRequestFilter;
 
@@ -19,9 +18,6 @@ public class SecretKeyValidationFilter extends OncePerRequestFilter {
     private static final Logger logger = LoggerFactory.getLogger(SecretKeyValidationFilter.class);
     private static final String SECRET_KEY_HEADER = "X-Secret-Key";
 
-    @Autowired
-    private EnvironmentSetup environmentSetup;
-
     @Override
     protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response,
                                   FilterChain filterChain) throws ServletException, IOException {
@@ -32,7 +28,7 @@ public class SecretKeyValidationFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (!environmentSetup.isSecretKeyEnabled()) {
+        if (!EnvironmentSetup.isSecretKeyEnabled()) {
             filterChain.doFilter(request, response);
             return;
         }
@@ -48,7 +44,7 @@ public class SecretKeyValidationFilter extends OncePerRequestFilter {
             return;
         }
 
-        if (!environmentSetup.getSecretKey().equals(providedKey)) {
+        if (!EnvironmentSetup.getSecretKey().equals(providedKey)) {
             logger.warn("Invalid secret key provided for request: {} from IP: {}",
                        requestPath, getClientIpAddress(request));
             response.setStatus(HttpServletResponse.SC_UNAUTHORIZED);

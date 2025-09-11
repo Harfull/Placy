@@ -2,8 +2,7 @@ package net.kyver.placy.controller;
 
 import net.kyver.placy.service.AsyncFileTransformService;
 import net.kyver.placy.service.FileTransformService;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
+import net.kyver.placy.util.Logger;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
@@ -25,8 +24,6 @@ import java.io.IOException;
 @RestController
 @RequestMapping("/api/v1")
 public class TransformController {
-    private static final Logger logger = LoggerFactory.getLogger(TransformController.class);
-
     @Autowired
     private FileTransformService fileTransformService;
 
@@ -39,16 +36,15 @@ public class TransformController {
             @RequestParam("placeholders") String placeholdersJson) {
 
         try {
-            logger.info("Received transform request for file: {} (size: {} bytes)",
-                       file.getOriginalFilename(), file.getSize());
+            Logger.info("Transform request: " + file.getOriginalFilename() + " (" + file.getSize() + " bytes)");
 
             if (file.isEmpty()) {
-                logger.warn("Empty file received");
+                Logger.warn("Empty file received");
                 return ResponseEntity.badRequest().build();
             }
 
             if (!fileTransformService.isSupportedFileType(file.getOriginalFilename())) {
-                logger.warn("Unsupported file type: {}", file.getOriginalFilename());
+                Logger.warn("Unsupported file: " + file.getOriginalFilename());
                 return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).build();
             }
 
@@ -60,7 +56,7 @@ public class TransformController {
             AsyncFileTransformService.FileTransformResult result = futureResult.join();
 
             if (result.hasError()) {
-                logger.error("Error transforming file: {}", result.getError().getMessage(), result.getError());
+                Logger.error("Transform failed: " + result.getError().getMessage());
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
             }
 
@@ -71,16 +67,15 @@ public class TransformController {
             headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
             headers.setContentLength(transformedFile.length);
 
-            logger.info("Successfully transformed file: {} (output size: {} bytes)",
-                       file.getOriginalFilename(), transformedFile.length);
+            Logger.success("Transform complete: " + file.getOriginalFilename() + " (" + transformedFile.length + " bytes)");
 
             return new ResponseEntity<>(transformedFile, headers, HttpStatus.OK);
 
         } catch (IllegalArgumentException e) {
-            logger.error("Invalid request parameters: {}", e.getMessage());
+            Logger.error("Invalid params: " + e.getMessage());
             return ResponseEntity.badRequest().build();
         } catch (Exception e) {
-            logger.error("Error transforming file: {}", e.getMessage(), e);
+            Logger.error("Transform error: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
@@ -91,20 +86,20 @@ public class TransformController {
             @RequestParam("placeholders") String placeholdersJson) {
 
         try {
-            logger.info("Received batch transform request for {} files", files.length);
+            Logger.info("Batch transform: " + files.length + " files");
 
             if (files.length == 0) {
-                logger.warn("No files received in batch request");
+                Logger.warn("No files in batch request");
                 return ResponseEntity.badRequest().build();
             }
 
             for (MultipartFile file : files) {
                 if (file.isEmpty()) {
-                    logger.warn("Empty file in batch: {}", file.getOriginalFilename());
+                    Logger.warn("Empty file in batch: " + file.getOriginalFilename());
                     return ResponseEntity.badRequest().build();
                 }
                 if (!fileTransformService.isSupportedFileType(file.getOriginalFilename())) {
-                    logger.warn("Unsupported file type in batch: {}", file.getOriginalFilename());
+                    Logger.warn("Unsupported file in batch: " + file.getOriginalFilename());
                     return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE).build();
                 }
             }
@@ -122,9 +117,9 @@ public class TransformController {
                 .toList();
 
             if (!errors.isEmpty()) {
-                logger.error("Batch processing had {} errors out of {} files", errors.size(), results.size());
+                Logger.error("Batch errors: " + errors.size() + "/" + results.size() + " failed");
                 errors.forEach(error ->
-                    logger.error("Error in file {}: {}", error.getFilename(), error.getError().getMessage()));
+                    Logger.error("File error " + error.getFilename() + ": " + error.getError().getMessage()));
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
             }
 
@@ -136,16 +131,15 @@ public class TransformController {
             headers.setContentLength(zipData.length);
 
             long totalInputSize = Arrays.stream(files).mapToLong(MultipartFile::getSize).sum();
-            logger.info("Successfully transformed {} files (total input: {} bytes, output: {} bytes)",
-                       results.size(), totalInputSize, zipData.length);
+            Logger.success("Batch complete: " + results.size() + " files (" + totalInputSize + " → " + zipData.length + " bytes)");
 
             return new ResponseEntity<>(zipData, headers, HttpStatus.OK);
 
         } catch (IllegalArgumentException e) {
-            logger.error("Invalid batch request parameters: {}", e.getMessage());
+            Logger.error("Invalid batch params: " + e.getMessage());
             return ResponseEntity.badRequest().build();
         } catch (Exception e) {
-            logger.error("Error in batch file transformation: {}", e.getMessage(), e);
+            Logger.error("Batch transform error: " + e.getMessage());
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).build();
         }
     }
@@ -155,7 +149,7 @@ public class TransformController {
              ZipOutputStream zos = new ZipOutputStream(baos)) {
 
             for (AsyncFileTransformService.FileTransformResult result : results) {
-                if (result.isSuccess()) {
+                if (!result.hasError()) {
                     ZipEntry entry = new ZipEntry(result.getFilename());
                     entry.setSize(result.getData().length);
                     zos.putNextEntry(entry);
@@ -171,6 +165,7 @@ public class TransformController {
 
     @GetMapping("/health")
     public ResponseEntity<String> health() {
-        return ResponseEntity.ok("File Transform Service is running");
+
+        return ResponseEntity.ok("Placy Transform Service is running");
     }
 }

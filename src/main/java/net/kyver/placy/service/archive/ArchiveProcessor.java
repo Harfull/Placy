@@ -29,7 +29,6 @@ public class ArchiveProcessor {
     private final ClassProcessor classProcessor;
     private final ImageProcessor imageProcessor;
     private final DocumentProcessor documentProcessor;
-    private final EnvironmentSetup environmentSetup;
     private final Executor fileProcessingExecutor;
 
     @Autowired
@@ -38,14 +37,12 @@ public class ArchiveProcessor {
                             ClassProcessor classProcessor,
                             ImageProcessor imageProcessor,
                             DocumentProcessor documentProcessor,
-                            EnvironmentSetup environmentSetup,
                             @Qualifier("fileProcessingExecutor") Executor fileProcessingExecutor) {
         this.fileTypeDetector = fileTypeDetector;
         this.streamProcessor = streamProcessor;
         this.classProcessor = classProcessor;
         this.imageProcessor = imageProcessor;
         this.documentProcessor = documentProcessor;
-        this.environmentSetup = environmentSetup;
         this.fileProcessingExecutor = fileProcessingExecutor;
     }
 
@@ -73,7 +70,7 @@ public class ArchiveProcessor {
     }
 
     private byte[] processJarArchive(byte[] jarBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Processing JAR archive of {} bytes with async={}", jarBytes.length, environmentSetup.isAsyncProcessingEnabled());
+        logger.debug("Processing JAR archive of {} bytes with async={}", jarBytes.length, EnvironmentSetup.isAsyncProcessingEnabled());
 
         try (ByteArrayInputStream input = new ByteArrayInputStream(jarBytes);
              JarInputStream jarIn = new JarInputStream(input);
@@ -85,7 +82,7 @@ public class ArchiveProcessor {
                     new JarOutputStream(output, manifest) :
                     new JarOutputStream(output)) {
 
-                if (environmentSetup.isAsyncProcessingEnabled()) {
+                if (EnvironmentSetup.isAsyncProcessingEnabled()) {
                     processJarEntriesAsync(jarIn, jarOut, placeholders);
                 } else {
                     processJarEntriesSync(jarIn, jarOut, placeholders);
@@ -101,14 +98,14 @@ public class ArchiveProcessor {
     }
 
     private byte[] processZipArchive(byte[] zipBytes, Map<String, String> placeholders) throws IOException {
-        logger.debug("Processing ZIP archive of {} bytes with async={}", zipBytes.length, environmentSetup.isAsyncProcessingEnabled());
+        logger.debug("Processing ZIP archive of {} bytes with async={}", zipBytes.length, EnvironmentSetup.isAsyncProcessingEnabled());
 
         try (ByteArrayInputStream input = new ByteArrayInputStream(zipBytes);
              ZipInputStream zipIn = new ZipInputStream(input);
              ByteArrayOutputStream output = new ByteArrayOutputStream()) {
 
             try (ZipOutputStream zipOut = new ZipOutputStream(output)) {
-                if (environmentSetup.isAsyncProcessingEnabled()) {
+                if (EnvironmentSetup.isAsyncProcessingEnabled()) {
                     processZipEntriesAsync(zipIn, zipOut, placeholders);
                 } else {
                     processZipEntriesSync(zipIn, zipOut, placeholders);
@@ -408,4 +405,3 @@ public class ArchiveProcessor {
         }
     }
 }
-
