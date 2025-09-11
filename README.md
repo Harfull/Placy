@@ -118,17 +118,6 @@ curl -X POST http://localhost:8080/api/v1/transform \
 - `X-Secret-Key`: Required if SECRET_KEY environment variable is set
 - `Content-Type`: `multipart/form-data`
 
-## 📊 Performance Benchmarks
-
-| File Size | File Type | Processing Time | Memory Usage |
-|-----------|-----------|----------------|--------------|
-| 10MB      | JAR       | ~500ms        | 50MB         |
-| 50MB      | ZIP       | ~2s           | 100MB        |
-| 100MB     | TAR.GZ    | ~4s           | 150MB        |
-| 500MB     | Archive   | ~15s          | 200MB        |
-
-*Benchmarks on Intel i7, 16GB RAM*
-
 ## 🏗️ Architecture
 
 ### Modular Design
@@ -180,7 +169,7 @@ Large files are automatically processed in parallel chunks for maximum performan
 
 ### Building from Source
 ```bash
-git clone https://github.com/yourusername/placy.git
+git clone https://github.com/Harfull/placy.git
 cd placy
 ### Asynchronous Processing
 Placy supports high-performance asynchronous file processing for optimal throughput:
@@ -240,13 +229,6 @@ server.ssl.enabled=false
 server.ssl.key-store=classpath:keystore.p12
 server.ssl.key-store-password=changeit
 ```
-
-### Supported Extensions
-Add new file extensions by editing files in `src/main/resources/supported/`:
-- `text.txt` - Text file extensions
-- `archives.txt` - Archive file extensions  
-- `images.txt` - Image file extensions
-- `documents.txt` - Document file extensions
 
 ## 🤝 Contributing
 
