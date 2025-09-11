@@ -46,19 +46,8 @@ public class ClassProcessor {
     }
 
     private byte[] transformClass(byte[] classBytes, Map<String, String> replacements) {
-        try {
-            ClassReader classReader = new ClassReader(classBytes);
-            ClassWriter classWriter = new ClassWriter(ClassWriter.COMPUTE_MAXS);
-
-            PlaceholderClassVisitor classVisitor = new PlaceholderClassVisitor(classWriter, replacements);
-            classReader.accept(classVisitor, ClassReader.SKIP_DEBUG);
-
-            byte[] result = classWriter.toByteArray();
-            if (result != null && result.length > 0) {
-                return result;
-            }
-        } catch (Exception e) {
-            logger.debug("Frame computation failed, trying without: {}", e.getMessage());
+        if (!classContainsAnyPlaceholder(classBytes, replacements)) {
+            return classBytes;
         }
 
         try {
@@ -69,47 +58,80 @@ public class ClassProcessor {
             classReader.accept(classVisitor, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
 
             byte[] result = classWriter.toByteArray();
-            if (result != null && result.length > 0) {
+
+            if (result != null && result.length > 0 && isValidClassFile(result)) {
+                logger.debug("Successfully transformed class with {} bytes -> {} bytes", classBytes.length, result.length);
                 return result;
             }
         } catch (Exception e) {
-            logger.debug("Basic transformation failed: {}", e.getMessage());
+            logger.debug("Safe transformation failed: {}", e.getMessage());
         }
 
-        if (needsTransformation(classBytes, replacements)) {
-            logger.warn("Class needs transformation but ASM processing failed, attempting manual string replacement");
-            return attemptManualReplacement(classBytes, replacements);
-        }
-
+        logger.debug("Class transformation failed or produced invalid result, using original bytes");
         return classBytes;
     }
 
-    private boolean needsTransformation(byte[] classBytes, Map<String, String> replacements) {
-        try {
-            String classAsString = new String(classBytes, "UTF-8");
-            for (String placeholder : replacements.keySet()) {
-                if (classAsString.contains(placeholder)) {
-                    return true;
-                }
+    private boolean classContainsAnyPlaceholder(byte[] classBytes, Map<String, String> replacements) {
+        if (replacements.isEmpty()) {
+            return false;
+        }
+
+        for (String placeholder : replacements.keySet()) {
+            if (placeholder.length() > classBytes.length) continue;
+
+            byte[] needleBytes = placeholder.getBytes();
+            if (boyerMooreSearch(classBytes, needleBytes) != -1) {
+                return true;
             }
-        } catch (Exception e) {
-            return true;
         }
         return false;
     }
 
-    private byte[] attemptManualReplacement(byte[] classBytes, Map<String, String> replacements) {
+    private int boyerMooreSearch(byte[] text, byte[] pattern) {
+        if (pattern.length == 0) return 0;
+        if (pattern.length > text.length) return -1;
+
+        int[] badChar = new int[256];
+        java.util.Arrays.fill(badChar, pattern.length);
+        for (int i = 0; i < pattern.length - 1; i++) {
+            badChar[pattern[i] & 0xFF] = pattern.length - 1 - i;
+        }
+
+        int shift = 0;
+        while (shift <= text.length - pattern.length) {
+            int j = pattern.length - 1;
+
+            while (j >= 0 && pattern[j] == text[shift + j]) {
+                j--;
+            }
+
+            if (j < 0) {
+                return shift;
+            } else {
+                shift += Math.max(1, badChar[text[shift + pattern.length - 1] & 0xFF]);
+            }
+        }
+
+        return -1;
+    }
+
+    private boolean isValidClassFile(byte[] classBytes) {
+        if (classBytes == null || classBytes.length < 10) {
+            return false;
+        }
+
+        if (classBytes[0] != (byte) 0xCA ||
+                classBytes[1] != (byte) 0xFE ||
+                classBytes[2] != (byte) 0xBA ||
+                classBytes[3] != (byte) 0xBE) {
+            return false;
+        }
+
         try {
-            byte[] result = classBytes.clone();
-
-            ClassReader reader = new ClassReader(classBytes);
-
-            logger.debug("Manual replacement attempted but using original bytes for safety");
-            return classBytes;
-
+            new ClassReader(classBytes);
+            return true;
         } catch (Exception e) {
-            logger.warn("Manual replacement failed: {}", e.getMessage());
-            return classBytes;
+            return false;
         }
     }
 

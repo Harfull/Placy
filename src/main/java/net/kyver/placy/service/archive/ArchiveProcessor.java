@@ -13,7 +13,6 @@ import org.springframework.stereotype.Component;
 
 import java.io.*;
 import java.util.*;
-import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
 import java.util.zip.*;
@@ -232,81 +231,6 @@ public class ArchiveProcessor {
         logger.debug("Processed {} ZIP entries using parallel streams", tasks.size());
     }
 
-    private Map<String, byte[]> processBatchedEntries(List<JarEntryData> entries, Map<String, String> placeholders) {
-        Map<String, byte[]> results = new ConcurrentHashMap<>();
-
-        int availableThreads = Math.max(2, Runtime.getRuntime().availableProcessors() / 4);
-        int batchSize = Math.max(10, entries.size() / availableThreads);
-
-        List<List<JarEntryData>> batches = partitionList(entries, batchSize);
-        List<CompletableFuture<Void>> batchFutures = new ArrayList<>();
-
-        logger.debug("Processing {} entries in {} batches with {} threads",
-                    entries.size(), batches.size(), availableThreads);
-
-        for (List<JarEntryData> batch : batches) {
-            CompletableFuture<Void> batchFuture = CompletableFuture.runAsync(() -> {
-                for (JarEntryData entryData : batch) {
-                    try {
-                        String entryName = entryData.entry.getName();
-                        byte[] processedData = processEntryContent(entryName, entryData.data, placeholders);
-                        results.put(entryName, processedData);
-                    } catch (Exception e) {
-                        logger.warn("Failed to process entry {}: {}", entryData.entry.getName(), e.getMessage());
-                        results.put(entryData.entry.getName(), entryData.data);
-                    }
-                }
-            }, fileProcessingExecutor);
-            batchFutures.add(batchFuture);
-        }
-
-        CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0])).join();
-
-        logger.debug("Completed processing {} entries across {} batch futures", entries.size(), batches.size());
-        return results;
-    }
-
-    private Map<String, byte[]> processBatchedZipEntries(List<ZipEntryData> entries, Map<String, String> placeholders) {
-        Map<String, byte[]> results = new ConcurrentHashMap<>();
-
-        int availableThreads = Math.max(2, Runtime.getRuntime().availableProcessors() / 4);
-        int batchSize = Math.max(10, entries.size() / availableThreads);
-
-        List<List<ZipEntryData>> batches = partitionList(entries, batchSize);
-        List<CompletableFuture<Void>> batchFutures = new ArrayList<>();
-
-        logger.debug("Processing {} entries in {} batches with {} threads",
-                    entries.size(), batches.size(), availableThreads);
-
-        for (List<ZipEntryData> batch : batches) {
-            CompletableFuture<Void> batchFuture = CompletableFuture.runAsync(() -> {
-                for (ZipEntryData entryData : batch) {
-                    try {
-                        String entryName = entryData.entry.getName();
-                        byte[] processedData = processEntryContent(entryName, entryData.data, placeholders);
-                        results.put(entryName, processedData);
-                    } catch (Exception e) {
-                        logger.warn("Failed to process entry {}: {}", entryData.entry.getName(), e.getMessage());
-                        results.put(entryData.entry.getName(), entryData.data);
-                    }
-                }
-            }, fileProcessingExecutor);
-            batchFutures.add(batchFuture);
-        }
-
-        CompletableFuture.allOf(batchFutures.toArray(new CompletableFuture[0])).join();
-
-        logger.debug("Completed processing {} entries across {} batch futures", entries.size(), batches.size());
-        return results;
-    }
-
-    private <T> List<List<T>> partitionList(List<T> list, int batchSize) {
-        List<List<T>> partitions = new ArrayList<>();
-        for (int i = 0; i < list.size(); i += batchSize) {
-            partitions.add(list.subList(i, Math.min(i + batchSize, list.size())));
-        }
-        return partitions;
-    }
 
     private void processJarEntriesSync(JarInputStream jarIn, JarOutputStream jarOut, Map<String, String> placeholders) throws IOException {
         JarEntry entry;
@@ -441,57 +365,106 @@ public class ArchiveProcessor {
         }
     }
 
+    private byte[] readEntryData(InputStream inputStream) throws IOException {
+        byte[] buffer = new byte[65536];
+        ByteArrayOutputStream output = new ByteArrayOutputStream(65536);
+
+        int bytesRead;
+        while ((bytesRead = inputStream.read(buffer)) != -1) {
+            output.write(buffer, 0, bytesRead);
+        }
+
+        return output.toByteArray();
+    }
+
     private byte[] processEntryContent(String entryName, byte[] originalData, Map<String, String> placeholders) {
+        if (originalData == null || originalData.length == 0) {
+            return originalData;
+        }
+
+        if (placeholders.isEmpty() || isSkippableFile(entryName)) {
+            return originalData;
+        }
+
         try {
-            if (originalData == null || originalData.length == 0) {
-                logger.warn("Entry {} has no data, skipping processing", entryName);
-                return originalData;
-            }
-
-            if (isArchiveFile(entryName)) {
-                logger.debug("Processing nested archive: {} ({} bytes)", entryName, originalData.length);
-                byte[] processed = processArchive(originalData, entryName, placeholders);
-                logger.debug("Nested archive {} processed: {} -> {} bytes", entryName, originalData.length, processed.length);
-                return processed;
-            }
-
             if (entryName.endsWith(".class")) {
-                logger.debug("Processing class file: {} ({} bytes)", entryName, originalData.length);
-                byte[] processed = classProcessor.replacePlaceholdersInClass(originalData, placeholders);
-                if (processed.length == 0) {
-                    logger.warn("Class processing returned empty data for {}, using original", entryName);
-                    return originalData;
-                }
-                return processed;
+                return classProcessor.replacePlaceholdersInClass(originalData, placeholders);
             } else if (isTextFile(entryName, originalData)) {
-                logger.debug("Processing text file: {} ({} bytes)", entryName, originalData.length);
-                return streamProcessor.transformTextStream(originalData, placeholders);
+                if (containsAnyPlaceholder(originalData, placeholders)) {
+                    return streamProcessor.transformTextStream(originalData, placeholders);
+                }
+                return originalData;
+            } else if (isArchiveFile(entryName)) {
+                return processArchive(originalData, entryName, placeholders);
             } else if (isImageFile(entryName)) {
-                logger.debug("Processing image file: {} ({} bytes)", entryName, originalData.length);
                 return imageProcessor.processImage(originalData, entryName, placeholders);
             } else if (documentProcessor.isSupportedDocument(entryName)) {
-                logger.debug("Processing document: {} ({} bytes)", entryName, originalData.length);
                 return documentProcessor.processDocument(originalData, entryName, placeholders);
             }
 
             return originalData;
 
         } catch (Exception e) {
-            logger.warn("Failed to process entry {}: {}, using original data", entryName, e.getMessage());
+            logger.warn("Failed to process entry {}: {}", entryName, e.getMessage());
             return originalData;
         }
     }
 
-    private byte[] readEntryData(InputStream inputStream) throws IOException {
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        byte[] data = new byte[8192];
-        int bytesRead;
+    private static final Set<String> SKIPPABLE_EXTENSIONS = Set.of(
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg",
+        ".mp3", ".mp4", ".avi", ".mov", ".wav", ".ogg",
+        ".pdf", ".doc", ".docx", ".xls", ".xlsx", ".ppt", ".pptx",
+        ".ttf", ".otf", ".woff", ".woff2", ".eot",
+        ".dll", ".so", ".dylib", ".exe", ".bin", ".dat"
+    );
 
-        while ((bytesRead = inputStream.read(data)) != -1) {
-            buffer.write(data, 0, bytesRead);
+    private boolean isSkippableFile(String filename) {
+        String extension = getFileExtension(filename).toLowerCase();
+        return SKIPPABLE_EXTENSIONS.contains(extension);
+    }
+
+    private boolean containsAnyPlaceholder(byte[] data, Map<String, String> placeholders) {
+        if (placeholders.isEmpty() || data.length == 0) {
+            return false;
         }
 
-        return buffer.toByteArray();
+        for (String placeholder : placeholders.keySet()) {
+            if (placeholder.length() > data.length) continue;
+
+            byte[] needleBytes = placeholder.getBytes();
+            if (boyerMooreSearch(data, needleBytes) != -1) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    private int boyerMooreSearch(byte[] text, byte[] pattern) {
+        if (pattern.length == 0) return 0;
+        if (pattern.length > text.length) return -1;
+
+        int[] badChar = new int[256];
+        Arrays.fill(badChar, pattern.length);
+        for (int i = 0; i < pattern.length - 1; i++) {
+            badChar[pattern[i] & 0xFF] = pattern.length - 1 - i;
+        }
+
+        int shift = 0;
+        while (shift <= text.length - pattern.length) {
+            int j = pattern.length - 1;
+
+            while (j >= 0 && pattern[j] == text[shift + j]) {
+                j--;
+            }
+
+            if (j < 0) {
+                return shift;
+            } else {
+                shift += Math.max(1, badChar[text[shift + pattern.length - 1] & 0xFF]);
+            }
+        }
+
+        return -1;
     }
 
     private void copyJarEntryMetadata(JarEntry source, JarEntry target) throws IOException {
