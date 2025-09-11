@@ -120,119 +120,116 @@ public class ArchiveProcessor {
     }
 
     private void processJarEntriesAsync(JarInputStream jarIn, JarOutputStream jarOut, Map<String, String> placeholders) throws IOException {
-        List<JarEntryData> entries = new ArrayList<>();
+        List<JarEntryProcessingTask> tasks = new ArrayList<>();
 
         JarEntry entry;
         while ((entry = jarIn.getNextJarEntry()) != null) {
-            byte[] data = entry.isDirectory() ? new byte[0] : readEntryData(jarIn);
-            entries.add(new JarEntryData(entry, data));
-        }
-
-        if (entries.isEmpty()) {
-            return;
-        }
-
-        List<JarEntryData> filesToProcess = entries.stream()
-                .filter(e -> !e.entry.isDirectory())
-                .toList();
-
-        Map<String, byte[]> processedData = processBatchedEntries(filesToProcess, placeholders);
-
-        for (JarEntryData entryData : entries) {
-            JarEntry originalEntry = entryData.entry;
-
-            if (originalEntry.isDirectory()) {
-                JarEntry newEntry = new JarEntry(originalEntry.getName());
-                copyJarEntryMetadata(originalEntry, newEntry);
+            if (entry.isDirectory()) {
+                JarEntry newEntry = new JarEntry(entry.getName());
+                copyJarEntryMetadata(entry, newEntry);
                 jarOut.putNextEntry(newEntry);
                 jarOut.closeEntry();
             } else {
-                String entryName = originalEntry.getName();
-                byte[] processedBytes = processedData.getOrDefault(entryName, entryData.data);
-
-                JarEntry newEntry = new JarEntry(originalEntry.getName());
-                copyJarEntryMetadata(originalEntry, newEntry);
-                newEntry.setSize(processedBytes.length);
-
-                if (newEntry.getMethod() == ZipEntry.STORED) {
-                    CRC32 crc = new CRC32();
-                    crc.update(processedBytes);
-                    newEntry.setCrc(crc.getValue());
-                }
-
-                jarOut.putNextEntry(newEntry);
-                jarOut.write(processedBytes);
-                jarOut.closeEntry();
+                byte[] data = readEntryData(jarIn);
+                tasks.add(new JarEntryProcessingTask(entry, data));
             }
         }
 
-        logger.debug("Processed {} JAR entries asynchronously", entries.size());
+        if (tasks.isEmpty()) {
+            return;
+        }
+
+        Map<String, byte[]> results = tasks.parallelStream()
+                .collect(ConcurrentHashMap::new,
+                        (map, task) -> {
+                            try {
+                                byte[] processedData = processEntryContent(task.entry.getName(), task.data, placeholders);
+                                map.put(task.entry.getName(), processedData);
+                            } catch (Exception e) {
+                                logger.warn("Failed to process entry {}: {}", task.entry.getName(), e.getMessage());
+                                map.put(task.entry.getName(), task.data);
+                            }
+                        },
+                        Map::putAll);
+
+        for (JarEntryProcessingTask task : tasks) {
+            JarEntry originalEntry = task.entry;
+            String entryName = originalEntry.getName();
+            byte[] processedBytes = results.get(entryName);
+
+            JarEntry newEntry = new JarEntry(originalEntry.getName());
+            copyJarEntryMetadata(originalEntry, newEntry);
+            newEntry.setSize(processedBytes.length);
+
+            if (newEntry.getMethod() == ZipEntry.STORED) {
+                CRC32 crc = new CRC32();
+                crc.update(processedBytes);
+                newEntry.setCrc(crc.getValue());
+            }
+
+            jarOut.putNextEntry(newEntry);
+            jarOut.write(processedBytes);
+            jarOut.closeEntry();
+        }
+
+        logger.debug("Processed {} JAR entries using parallel streams", tasks.size());
     }
 
     private void processZipEntriesAsync(ZipInputStream zipIn, ZipOutputStream zipOut, Map<String, String> placeholders) throws IOException {
-        List<ZipEntryData> entries = new ArrayList<>();
+        List<ZipEntryProcessingTask> tasks = new ArrayList<>();
 
         ZipEntry entry;
         while ((entry = zipIn.getNextEntry()) != null) {
-            byte[] data = entry.isDirectory() ? new byte[0] : readEntryData(zipIn);
-            entries.add(new ZipEntryData(entry, data));
-        }
-
-        if (entries.isEmpty()) {
-            return;
-        }
-
-        List<ZipEntryData> filesToProcess = entries.stream()
-                .filter(e -> !e.entry.isDirectory())
-                .toList();
-
-        Map<String, byte[]> processedData = processBatchedZipEntries(filesToProcess, placeholders);
-
-        for (ZipEntryData entryData : entries) {
-            ZipEntry originalEntry = entryData.entry;
-
-            if (originalEntry.isDirectory()) {
-                ZipEntry newEntry = new ZipEntry(originalEntry.getName());
-                copyZipEntryMetadata(originalEntry, newEntry);
+            if (entry.isDirectory()) {
+                ZipEntry newEntry = new ZipEntry(entry.getName());
+                copyZipEntryMetadata(entry, newEntry);
                 zipOut.putNextEntry(newEntry);
                 zipOut.closeEntry();
             } else {
-                String entryName = originalEntry.getName();
-                byte[] originalData = entryData.data;
-                byte[] processedBytes = processedData.getOrDefault(entryName, originalData);
-
-                ZipEntry newEntry = new ZipEntry(originalEntry.getName());
-
-                newEntry.setTime(originalEntry.getTime());
-                if (originalEntry.getComment() != null) {
-                    newEntry.setComment(originalEntry.getComment());
-                }
-                if (originalEntry.getExtra() != null) {
-                    newEntry.setExtra(originalEntry.getExtra());
-                }
-
-                if (originalEntry.getMethod() == ZipEntry.STORED) {
-                    if (processedBytes.length != originalData.length) {
-                        newEntry.setMethod(ZipEntry.DEFLATED);
-                    } else {
-                        newEntry.setMethod(ZipEntry.STORED);
-                        CRC32 crc = new CRC32();
-                        crc.update(processedBytes);
-                        newEntry.setCrc(crc.getValue());
-                        newEntry.setSize(processedBytes.length);
-                        newEntry.setCompressedSize(processedBytes.length);
-                    }
-                } else {
-                    newEntry.setMethod(originalEntry.getMethod());
-                }
-
-                zipOut.putNextEntry(newEntry);
-                zipOut.write(processedBytes);
-                zipOut.closeEntry();
+                byte[] data = readEntryData(zipIn);
+                tasks.add(new ZipEntryProcessingTask(entry, data));
             }
         }
 
-        logger.debug("Processed {} ZIP entries asynchronously", entries.size());
+        if (tasks.isEmpty()) {
+            return;
+        }
+
+        Map<String, byte[]> results = tasks.parallelStream()
+                .collect(ConcurrentHashMap::new,
+                        (map, task) -> {
+                            try {
+                                byte[] processedData = processEntryContent(task.entry.getName(), task.data, placeholders);
+                                map.put(task.entry.getName(), processedData);
+                            } catch (Exception e) {
+                                logger.warn("Failed to process entry {}: {}", task.entry.getName(), e.getMessage());
+                                map.put(task.entry.getName(), task.data);
+                            }
+                        },
+                        Map::putAll);
+
+        for (ZipEntryProcessingTask task : tasks) {
+            ZipEntry originalEntry = task.entry;
+            String entryName = originalEntry.getName();
+            byte[] processedBytes = results.get(entryName);
+
+            ZipEntry newEntry = new ZipEntry(originalEntry.getName());
+            newEntry.setTime(originalEntry.getTime());
+            if (originalEntry.getComment() != null) {
+                newEntry.setComment(originalEntry.getComment());
+            }
+            if (originalEntry.getExtra() != null) {
+                newEntry.setExtra(originalEntry.getExtra());
+            }
+
+            newEntry.setMethod(ZipEntry.DEFLATED);
+
+            zipOut.putNextEntry(newEntry);
+            zipOut.write(processedBytes);
+            zipOut.closeEntry();
+        }
+
+        logger.debug("Processed {} ZIP entries using parallel streams", tasks.size());
     }
 
     private Map<String, byte[]> processBatchedEntries(List<JarEntryData> entries, Map<String, String> placeholders) {
@@ -566,6 +563,26 @@ public class ArchiveProcessor {
         final byte[] data;
 
         ZipEntryData(ZipEntry entry, byte[] data) {
+            this.entry = entry;
+            this.data = data;
+        }
+    }
+
+    private static class JarEntryProcessingTask {
+        final JarEntry entry;
+        final byte[] data;
+
+        JarEntryProcessingTask(JarEntry entry, byte[] data) {
+            this.entry = entry;
+            this.data = data;
+        }
+    }
+
+    private static class ZipEntryProcessingTask {
+        final ZipEntry entry;
+        final byte[] data;
+
+        ZipEntryProcessingTask(ZipEntry entry, byte[] data) {
             this.entry = entry;
             this.data = data;
         }
