@@ -93,10 +93,18 @@ public class TransformController {
                     String.valueOf(result.getProcessingResult().getThroughputMBps()));
                 headers.add("X-Replacements-Made",
                     String.valueOf(result.getProcessingResult().getReplacementCount()));
+                double seconds = result.getProcessingResult().getProcessingTimeMillis() / 1000.0;
+                headers.add("X-Processing-Time-S", String.format("%.3f", seconds));
             }
 
-            logger.info("Transform completed successfully: {} ({} bytes processed)",
-                       filename, result.getContent().length);
+            if (result.getProcessingResult() != null) {
+                double secs = result.getProcessingResult().getProcessingTimeMillis() / 1000.0;
+                logger.info("Transform completed successfully: {} ({} bytes processed) - took {} s",
+                           filename, result.getContent().length, String.format("%.3f", secs));
+            } else {
+                logger.info("Transform completed successfully: {} ({} bytes processed)",
+                           filename, result.getContent().length);
+            }
 
             return new ResponseEntity<>(result.getContent(), headers, HttpStatus.OK);
 
@@ -169,13 +177,20 @@ public class TransformController {
                 .mapToLong(r -> r.getProcessingResult() != null ? r.getProcessingResult().getReplacementCount() : 0)
                 .sum();
 
-            headers.add("X-Files-Processed", String.valueOf(results.size()));
-            headers.add("X-Total-Replacements", String.valueOf(totalReplacements));
+            double totalProcessingTimeMillis = results.stream()
+                .filter(TransformationResult::isSuccess)
+                .mapToDouble(r -> r.getProcessingResult() != null ? r.getProcessingResult().getProcessingTimeMillis() : 0.0)
+                .sum();
+            double totalProcessingTimeSeconds = totalProcessingTimeMillis / 1000.0;
 
-            logger.info("Batch transform completed: {} files processed, {} total replacements",
-                       results.size(), totalReplacements);
+             headers.add("X-Files-Processed", String.valueOf(results.size()));
+             headers.add("X-Total-Replacements", String.valueOf(totalReplacements));
+             headers.add("X-Total-Processing-Time-S", String.format("%.3f", totalProcessingTimeSeconds));
 
-            return new ResponseEntity<>(zipContent, headers, HttpStatus.OK);
+             logger.info("Batch transform completed: {} files processed, {} total replacements",
+                        results.size(), totalReplacements);
+
+             return new ResponseEntity<>(zipContent, headers, HttpStatus.OK);
 
         } catch (Exception e) {
             logger.error("Batch transform error: {}", e.getMessage(), e);

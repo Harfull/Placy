@@ -40,9 +40,8 @@ public class ArchiveFileProcessor implements FileProcessor {
         "properties", "md", "conf", "config", "sql", "sh", "bat"
     );
 
-    // High-performance configuration
-    private static final int BUFFER_SIZE = 2 * 1024 * 1024; // 2MB buffers
-    private static final int PARALLEL_THRESHOLD = 50 * 1024; // 50KB threshold for parallel processing
+    private static final int BUFFER_SIZE = 2 * 1024 * 1024;
+    private static final int PARALLEL_THRESHOLD = 50 * 1024;
     private static final int MAX_CONCURRENT_ENTRIES = Runtime.getRuntime().availableProcessors() * 2;
 
     private final PlaceholderEngine engine;
@@ -90,18 +89,17 @@ public class ArchiveFileProcessor implements FileProcessor {
         long totalBytesProcessed = 0;
         long totalReplacements = 0;
         int filesProcessed = 0;
+        long startTime = System.nanoTime();
 
         try (JarInputStream jarIn = new JarInputStream(new BufferedInputStream(input, BUFFER_SIZE));
              JarOutputStream jarOut = new JarOutputStream(new BufferedOutputStream(output, BUFFER_SIZE))) {
 
-            // Handle manifest first
             if (jarIn.getManifest() != null) {
                 jarOut.putNextEntry(new JarEntry("META-INF/MANIFEST.MF"));
                 jarIn.getManifest().write(jarOut);
                 jarOut.closeEntry();
             }
 
-            // Collect all entries for potential parallel processing
             List<ArchiveEntryTask> entryTasks = new ArrayList<>();
             JarEntry entry;
 
@@ -112,7 +110,6 @@ public class ArchiveFileProcessor implements FileProcessor {
                 }
 
                 if (!entry.isDirectory()) {
-                    // Read entry data into memory for parallel processing
                     ByteArrayOutputStream entryBuffer = new ByteArrayOutputStream();
                     transferOptimized(jarIn, entryBuffer);
                     byte[] entryData = entryBuffer.toByteArray();
@@ -124,7 +121,6 @@ public class ArchiveFileProcessor implements FileProcessor {
                 jarIn.closeEntry();
             }
 
-            // Process entries in parallel for better performance
             List<CompletableFuture<ArchiveEntryResult>> futures = new ArrayList<>();
 
             for (ArchiveEntryTask task : entryTasks) {
@@ -140,7 +136,6 @@ public class ArchiveFileProcessor implements FileProcessor {
                 futures.add(future);
             }
 
-            // Write processed entries to output
             for (CompletableFuture<ArchiveEntryResult> future : futures) {
                 ArchiveEntryResult result = future.get(30, TimeUnit.SECONDS);
 
@@ -155,9 +150,11 @@ public class ArchiveFileProcessor implements FileProcessor {
 
             jarOut.finish();
 
+            long duration = System.nanoTime() - startTime;
             ProcessingResult result = new ProcessingResult(totalBytesProcessed, totalReplacements, placeholders.size());
-            logger.info("High-performance JAR processing completed: {} files processed, {} replacements made in parallel",
-                       filesProcessed, totalReplacements);
+            result.setProcessingTimeNanos(duration);
+            logger.info("High-performance JAR processing completed: {} files processed, {} replacements made in parallel ({} ms)",
+                       filesProcessed, totalReplacements, duration / 1_000_000.0);
 
             return result;
         }
@@ -169,17 +166,16 @@ public class ArchiveFileProcessor implements FileProcessor {
         long totalBytesProcessed = 0;
         long totalReplacements = 0;
         int filesProcessed = 0;
+        long startTime = System.nanoTime();
 
         try (ZipInputStream zipIn = new ZipInputStream(new BufferedInputStream(input, BUFFER_SIZE));
              ZipOutputStream zipOut = new ZipOutputStream(new BufferedOutputStream(output, BUFFER_SIZE))) {
 
-            // Collect all entries for potential parallel processing
             List<ArchiveEntryTask> entryTasks = new ArrayList<>();
             ZipEntry entry;
 
             while ((entry = zipIn.getNextEntry()) != null) {
                 if (!entry.isDirectory()) {
-                    // Read entry data into memory for parallel processing
                     ByteArrayOutputStream entryBuffer = new ByteArrayOutputStream();
                     transferOptimized(zipIn, entryBuffer);
                     byte[] entryData = entryBuffer.toByteArray();
@@ -191,7 +187,6 @@ public class ArchiveFileProcessor implements FileProcessor {
                 zipIn.closeEntry();
             }
 
-            // Process entries in parallel
             List<CompletableFuture<ArchiveEntryResult>> futures = new ArrayList<>();
 
             for (ArchiveEntryTask task : entryTasks) {
@@ -207,7 +202,6 @@ public class ArchiveFileProcessor implements FileProcessor {
                 futures.add(future);
             }
 
-            // Write processed entries to output
             for (CompletableFuture<ArchiveEntryResult> future : futures) {
                 ArchiveEntryResult result = future.get(30, TimeUnit.SECONDS);
 
@@ -222,12 +216,14 @@ public class ArchiveFileProcessor implements FileProcessor {
 
             zipOut.finish();
 
+            long duration = System.nanoTime() - startTime;
             ProcessingResult finalResult = new ProcessingResult(totalBytesProcessed, totalReplacements, placeholders.size());
-            logger.debug("High-performance ZIP processing completed: {} files processed in parallel", filesProcessed);
+            finalResult.setProcessingTimeNanos(duration);
+            logger.debug("High-performance ZIP processing completed: {} files processed in parallel ({} ms)", filesProcessed, duration / 1_000_000.0);
 
             return finalResult;
-        }
-    }
+         }
+     }
 
     private ArchiveEntryResult processEntryTask(ArchiveEntryTask task) throws Exception {
         ZipEntry entry = task.entry;
@@ -300,7 +296,6 @@ public class ArchiveFileProcessor implements FileProcessor {
 
             int replacements = 0;
 
-            // Pre-sorted placeholders for better performance
             List<Map.Entry<String, String>> sortedPlaceholders = placeholders.entrySet().stream()
                 .sorted((e1, e2) -> Integer.compare(e2.getKey().length(), e1.getKey().length()))
                 .toList();
@@ -324,7 +319,6 @@ public class ArchiveFileProcessor implements FileProcessor {
                                 newS = newS.replace(oldValue, newValue);
                                 int afterLength = newS.length();
 
-                                // Count actual replacements more efficiently
                                 if (beforeLength != afterLength) {
                                     int lengthDiff = newValue.length() - oldValue.length();
                                     if (lengthDiff != 0) {
@@ -411,7 +405,6 @@ public class ArchiveFileProcessor implements FileProcessor {
         }
     }
 
-    // Optimized data transfer with larger buffers
     private void transferOptimized(InputStream input, OutputStream output) throws IOException {
         byte[] buffer = new byte[BUFFER_SIZE];
         int bytesRead;
@@ -439,7 +432,6 @@ public class ArchiveFileProcessor implements FileProcessor {
         return filename != null && filename.toLowerCase().endsWith(".class");
     }
 
-    // Helper classes for parallel processing
     private static class ArchiveEntryTask {
         final ZipEntry entry;
         final byte[] originalData;
@@ -523,7 +515,6 @@ public class ArchiveFileProcessor implements FileProcessor {
 
     @Override
     public long estimateMemoryUsage(long fileSize) {
-        // Higher memory usage for parallel processing but much faster
         return Math.min(fileSize / 2, 200 * 1024 * 1024);
     }
 

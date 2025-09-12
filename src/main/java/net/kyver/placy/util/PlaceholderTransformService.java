@@ -56,6 +56,13 @@ public class PlaceholderTransformService {
 
                 ProcessingResult result = processor.process(input, output, placeholders, filename);
 
+                long duration = System.nanoTime() - startTime;
+                if (result != null && result.getProcessingTimeNanos() == 0L) {
+                    result.setProcessingTimeNanos(duration);
+                }
+
+                logger.info("File transformed: {} - processing time: {} ms", filename, duration / 1_000_000.0);
+
                 return TransformationResult.success(filename, output.toByteArray(), result);
             }
 
