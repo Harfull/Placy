@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "net.kyver"
-version = "1.0"
+version = "1.3"
 
 java {
     toolchain {
@@ -28,39 +28,12 @@ dependencies {
 
     implementation("ch.qos.logback:logback-classic:1.5.18")
     implementation("ch.qos.logback:logback-core:1.5.18")
-    implementation("org.codehaus.janino:janino:3.1.10")
-    implementation("org.codehaus.janino:commons-compiler:3.1.10")
-
-    implementation("org.slf4j:jul-to-slf4j:2.0.16")
 
     implementation("com.google.code.gson:gson:2.10.1")
-    implementation("org.json:json:20240303")
-
-    implementation("org.ow2.asm:asm:9.6")
-    implementation("org.ow2.asm:asm-commons:9.6")
-
-    implementation("org.apache.poi:poi:5.2.4")
-    implementation("org.apache.poi:poi-ooxml:5.2.4")
-    implementation("org.apache.poi:poi-scratchpad:5.2.4")
-
-    implementation("org.apache.commons:commons-compress:1.24.0")
-    implementation("org.tukaani:xz:1.9")
-
-    implementation("com.twelvemonkeys.imageio:imageio-core:3.10.1")
-    implementation("com.twelvemonkeys.imageio:imageio-jpeg:3.10.1")
-    implementation("com.twelvemonkeys.imageio:imageio-tiff:3.10.1")
-    implementation("com.twelvemonkeys.imageio:imageio-metadata:3.10.1")
-
-    implementation("org.apache.pdfbox:pdfbox:3.0.1")
 
     testImplementation("org.springframework.boot:spring-boot-starter-test")
     testImplementation("org.junit.jupiter:junit-jupiter")
     testImplementation("org.mockito:mockito-core")
-}
-
-configurations.all {
-    exclude(group = "org.springframework.boot", module = "spring-boot-starter-logging")
-    exclude(group = "org.apache.logging.log4j")
 }
 
 application {
@@ -78,4 +51,12 @@ tasks.named<org.springframework.boot.gradle.tasks.bundling.BootJar>("bootJar") {
 
 tasks.named<Jar>("jar") {
     enabled = false
+}
+
+tasks.test {
+    useJUnitPlatform()
+    testLogging {
+        events("passed", "skipped", "failed")
+        exceptionFormat = org.gradle.api.tasks.testing.logging.TestExceptionFormat.FULL
+    }
 }

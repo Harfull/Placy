@@ -1,0 +1,5 @@
+Hello PLACEHOLDER_NAME, welcome to PLACEHOLDER_COMPANY!
+This is a test file with placeholders.
+Your role is: PLACEHOLDER_ROLE
+End of test.
+

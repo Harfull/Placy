@@ -1,0 +1,26 @@
+logging:
+  level:
+    net.kyver.placy: INFO
+    org.springframework.security: WARN
+    org.springframework.web: WARN
+    org.springframework.boot: WARN
+    org.apache.tomcat: WARN
+    org.apache.catalina: WARN
+    org.hibernate: WARN
+    root: WARN
+
+  pattern:
+    console: "%clr(%d{HH:mm:ss.SSS}){faint} %clr(%-5level) %clr(%msg){cyan}%n"
+
+  console:
+    charset: UTF-8
+
+  file:
+    name: logs/placy.log
+    max-size: 10MB
+    max-history: 5
+    charset: UTF-8
+
+spring:
+  main:
+    banner-mode: off
