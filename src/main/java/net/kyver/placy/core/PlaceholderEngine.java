@@ -143,7 +143,7 @@ public class PlaceholderEngine {
 
     private ProcessingResult copyStream(InputStream input, OutputStream output) {
         try {
-            byte[] buffer = new byte[8192];
+            byte[] buffer = new byte[2 * 1024 * 1024];
             long totalBytes = 0;
             int bytesRead;
 

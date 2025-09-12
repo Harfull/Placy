@@ -46,6 +46,12 @@ public class Application {
         logger.info("✅ Started Placy application successfully");
         logger.info("🚀 Application is running on http://localhost:{}", System.getProperty("server.port", "8080"));
 
+        if (EnvironmentSetup.isAsyncProcessingEnabled()) {
+            logger.info("⚡ Asynchronous processing is enabled");
+        } else {
+            logger.info("⚡ Asynchronous processing is disabled");
+        }
+
         if (EnvironmentSetup.isCheckUpdatesEnabled()) {
             try {
                 updater.checkAndHandleUpdate();
@@ -78,8 +84,8 @@ public class Application {
         System.out.println();
         System.out.println(BLUE + "╔═══════════════════════════════════════╗" + RESET);
         System.out.println(BLUE + "║" + RESET + "                                       " + BLUE + "║" + RESET);
-        System.out.println(BLUE + "║" + RESET + "  " + BOLD + "PLACY - Processing System" + RESET + "         " + BLUE + "║" + RESET);
-        System.out.println(BLUE + "║" + RESET + "  Version: " + VERSION + "                    " + BLUE + "║" + RESET);
+        System.out.println(BLUE + "║" + RESET + "  " + BOLD + "PLACY - Processing System" + RESET + "            " + BLUE + "║" + RESET);
+        System.out.println(BLUE + "║" + RESET + "  Version: " + VERSION + "                         " + BLUE + "║" + RESET);
         System.out.println(BLUE + "║" + RESET + "                                       " + BLUE + "║" + RESET);
         System.out.println(BLUE + "╚═══════════════════════════════════════╝" + RESET);
         System.out.println();

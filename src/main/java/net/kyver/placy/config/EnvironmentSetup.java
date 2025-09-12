@@ -155,8 +155,12 @@ public class EnvironmentSetup {
         System.setProperty("placy.buffer.size", String.valueOf(optimalBufferSize));
 
         int cores = Runtime.getRuntime().availableProcessors();
-        System.setProperty("placy.threads.io", String.valueOf(Math.max(8, cores * 2)));
-        System.setProperty("placy.threads.cpu", String.valueOf(cores));
+        System.setProperty("placy.threads.io", String.valueOf(Math.max(16, cores * 4)));
+        System.setProperty("placy.threads.cpu", String.valueOf(cores * 2));
+
+        System.setProperty("placy.performance.aggressive", "true");
+        System.setProperty("placy.parallel.threshold", "32768");
+        System.setProperty("placy.buffer.write.size", "4194304");
     }
 
     private static void configureJVMSettings() {
@@ -166,12 +170,15 @@ public class EnvironmentSetup {
 
         System.setProperty("networkaddress.cache.ttl", "60");
         System.setProperty("networkaddress.cache.negative.ttl", "10");
+
+        System.setProperty("java.util.concurrent.ForkJoinPool.common.parallelism",
+                String.valueOf(Runtime.getRuntime().availableProcessors() * 2));
     }
 
     private static int calculateOptimalBufferSize(long maxMemory) {
-        long bufferSize = maxMemory / 1000;
+        long bufferSize = maxMemory / 500;
 
-        bufferSize = Math.max(64 * 1024, Math.min(bufferSize, 1024 * 1024));
+        bufferSize = Math.max(256 * 1024, Math.min(bufferSize, 4 * 1024 * 1024));
 
         return (int) bufferSize;
     }

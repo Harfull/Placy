@@ -4,6 +4,7 @@ import net.kyver.placy.config.EnvironmentSetup;
 import net.kyver.placy.core.PlaceholderEngine;
 import net.kyver.placy.core.ProcessingResult;
 import net.kyver.placy.core.ValidationResult;
+import net.kyver.placy.core.replacement.ParallelReplacementStrategy;
 import net.kyver.placy.processor.FileProcessor;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -11,8 +12,9 @@ import org.springframework.stereotype.Component;
 
 import javax.tools.*;
 import java.io.*;
-import java.nio.charset.StandardCharsets;
+ import java.nio.charset.StandardCharsets;
 import java.util.*;
+import java.util.concurrent.*;
 import java.util.jar.JarEntry;
 import java.util.jar.JarInputStream;
 import java.util.jar.JarOutputStream;
@@ -38,16 +40,26 @@ public class ArchiveFileProcessor implements FileProcessor {
         "properties", "md", "conf", "config", "sql", "sh", "bat"
     );
 
+    // High-performance configuration
+    private static final int BUFFER_SIZE = 2 * 1024 * 1024; // 2MB buffers
+    private static final int PARALLEL_THRESHOLD = 50 * 1024; // 50KB threshold for parallel processing
+    private static final int MAX_CONCURRENT_ENTRIES = Runtime.getRuntime().availableProcessors() * 2;
+
     private final PlaceholderEngine engine;
+    private final PlaceholderEngine parallelEngine;
     private final JavaCompiler compiler;
+    private final ForkJoinPool processingPool;
 
     public ArchiveFileProcessor() {
         this.engine = new PlaceholderEngine();
+        this.parallelEngine = new PlaceholderEngine(new ParallelReplacementStrategy());
         this.compiler = ToolProvider.getSystemJavaCompiler();
+        this.processingPool = new ForkJoinPool(MAX_CONCURRENT_ENTRIES);
+
         if (compiler == null) {
             logger.warn("Java compiler not available - .class files in archives will be copied without processing");
         }
-        logger.debug("ArchiveFileProcessor initialized with class file support");
+        logger.debug("High-performance ArchiveFileProcessor initialized with {} threads", MAX_CONCURRENT_ENTRIES);
     }
 
     @Override
@@ -56,19 +68,15 @@ public class ArchiveFileProcessor implements FileProcessor {
                                   Map<String, String> placeholders,
                                   String filename) {
 
-        logger.debug("Processing archive file: {}", filename);
-
-        long totalBytesProcessed = 0;
-        long totalReplacements = 0;
-        int filesProcessed = 0;
+        logger.debug("Processing archive file: {} with high-performance mode", filename);
 
         boolean isJar = filename != null && filename.toLowerCase().endsWith(".jar");
 
         try {
             if (isJar) {
-                return processJarFile(input, output, placeholders, filename);
+                return processJarFileOptimized(input, output, placeholders, filename);
             } else {
-                return processZipFile(input, output, placeholders, filename);
+                return processZipFileOptimized(input, output, placeholders, filename);
             }
         } catch (Exception e) {
             logger.error("Failed to process archive {}: {}", filename, e.getMessage(), e);
@@ -76,174 +84,208 @@ public class ArchiveFileProcessor implements FileProcessor {
         }
     }
 
-    private ProcessingResult processJarFile(InputStream input, OutputStream output,
-                                          Map<String, String> placeholders, String filename) throws Exception {
+    private ProcessingResult processJarFileOptimized(InputStream input, OutputStream output,
+                                                   Map<String, String> placeholders, String filename) throws Exception {
 
         long totalBytesProcessed = 0;
         long totalReplacements = 0;
         int filesProcessed = 0;
 
-        try (JarInputStream jarIn = new JarInputStream(new BufferedInputStream(input));
-             JarOutputStream jarOut = new JarOutputStream(new BufferedOutputStream(output))) {
+        try (JarInputStream jarIn = new JarInputStream(new BufferedInputStream(input, BUFFER_SIZE));
+             JarOutputStream jarOut = new JarOutputStream(new BufferedOutputStream(output, BUFFER_SIZE))) {
 
+            // Handle manifest first
             if (jarIn.getManifest() != null) {
                 jarOut.putNextEntry(new JarEntry("META-INF/MANIFEST.MF"));
                 jarIn.getManifest().write(jarOut);
                 jarOut.closeEntry();
             }
 
+            // Collect all entries for potential parallel processing
+            List<ArchiveEntryTask> entryTasks = new ArrayList<>();
             JarEntry entry;
+
             while ((entry = jarIn.getNextJarEntry()) != null) {
                 if (entry.getName().equals("META-INF/MANIFEST.MF")) {
                     jarIn.closeEntry();
                     continue;
                 }
 
-                logger.debug("Processing JAR entry: {}", entry.getName());
-
-                JarEntry newEntry = new JarEntry(entry.getName());
-                newEntry.setTime(entry.getTime());
-                jarOut.putNextEntry(newEntry);
-
                 if (!entry.isDirectory()) {
-                    ProcessingResult entryResult = processArchiveEntry(
-                        jarIn, jarOut, entry, placeholders, true);
+                    // Read entry data into memory for parallel processing
+                    ByteArrayOutputStream entryBuffer = new ByteArrayOutputStream();
+                    transferOptimized(jarIn, entryBuffer);
+                    byte[] entryData = entryBuffer.toByteArray();
 
-                    totalBytesProcessed += entryResult.getBytesProcessed();
-                    totalReplacements += entryResult.getReplacementCount();
+                    entryTasks.add(new ArchiveEntryTask(entry, entryData, placeholders, true));
+                    totalBytesProcessed += entryData.length;
                     filesProcessed++;
                 }
-
                 jarIn.closeEntry();
+            }
+
+            // Process entries in parallel for better performance
+            List<CompletableFuture<ArchiveEntryResult>> futures = new ArrayList<>();
+
+            for (ArchiveEntryTask task : entryTasks) {
+                CompletableFuture<ArchiveEntryResult> future = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return processEntryTask(task);
+                    } catch (Exception e) {
+                        logger.error("Failed to process entry {}: {}", task.entry.getName(), e.getMessage());
+                        return new ArchiveEntryResult(task.entry, task.originalData, 0);
+                    }
+                }, processingPool);
+
+                futures.add(future);
+            }
+
+            // Write processed entries to output
+            for (CompletableFuture<ArchiveEntryResult> future : futures) {
+                ArchiveEntryResult result = future.get(30, TimeUnit.SECONDS);
+
+                JarEntry newEntry = new JarEntry(result.entry.getName());
+                newEntry.setTime(result.entry.getTime());
+                jarOut.putNextEntry(newEntry);
+                jarOut.write(result.processedData);
                 jarOut.closeEntry();
+
+                totalReplacements += result.replacements;
             }
 
             jarOut.finish();
 
             ProcessingResult result = new ProcessingResult(totalBytesProcessed, totalReplacements, placeholders.size());
-            logger.info("JAR processing completed: {} files processed, {} replacements made",
+            logger.info("High-performance JAR processing completed: {} files processed, {} replacements made in parallel",
                        filesProcessed, totalReplacements);
 
             return result;
         }
     }
 
-    private ProcessingResult processZipFile(InputStream input, OutputStream output,
-                                          Map<String, String> placeholders, String filename) throws Exception {
+    private ProcessingResult processZipFileOptimized(InputStream input, OutputStream output,
+                                                   Map<String, String> placeholders, String filename) throws Exception {
 
         long totalBytesProcessed = 0;
         long totalReplacements = 0;
         int filesProcessed = 0;
 
-        try (ZipInputStream zipIn = new ZipInputStream(new BufferedInputStream(input));
-             ZipOutputStream zipOut = new ZipOutputStream(new BufferedOutputStream(output))) {
+        try (ZipInputStream zipIn = new ZipInputStream(new BufferedInputStream(input, BUFFER_SIZE));
+             ZipOutputStream zipOut = new ZipOutputStream(new BufferedOutputStream(output, BUFFER_SIZE))) {
 
+            // Collect all entries for potential parallel processing
+            List<ArchiveEntryTask> entryTasks = new ArrayList<>();
             ZipEntry entry;
+
             while ((entry = zipIn.getNextEntry()) != null) {
-                logger.debug("Processing ZIP entry: {}", entry.getName());
-
-                ZipEntry newEntry = new ZipEntry(entry.getName());
-                newEntry.setTime(entry.getTime());
-                zipOut.putNextEntry(newEntry);
-
                 if (!entry.isDirectory()) {
-                    ProcessingResult entryResult = processArchiveEntry(
-                        zipIn, zipOut, entry, placeholders, false);
+                    // Read entry data into memory for parallel processing
+                    ByteArrayOutputStream entryBuffer = new ByteArrayOutputStream();
+                    transferOptimized(zipIn, entryBuffer);
+                    byte[] entryData = entryBuffer.toByteArray();
 
-                    totalBytesProcessed += entryResult.getBytesProcessed();
-                    totalReplacements += entryResult.getReplacementCount();
+                    entryTasks.add(new ArchiveEntryTask(entry, entryData, placeholders, false));
+                    totalBytesProcessed += entryData.length;
                     filesProcessed++;
                 }
-
                 zipIn.closeEntry();
+            }
+
+            // Process entries in parallel
+            List<CompletableFuture<ArchiveEntryResult>> futures = new ArrayList<>();
+
+            for (ArchiveEntryTask task : entryTasks) {
+                CompletableFuture<ArchiveEntryResult> future = CompletableFuture.supplyAsync(() -> {
+                    try {
+                        return processEntryTask(task);
+                    } catch (Exception e) {
+                        logger.error("Failed to process entry {}: {}", task.entry.getName(), e.getMessage());
+                        return new ArchiveEntryResult(task.entry, task.originalData, 0);
+                    }
+                }, processingPool);
+
+                futures.add(future);
+            }
+
+            // Write processed entries to output
+            for (CompletableFuture<ArchiveEntryResult> future : futures) {
+                ArchiveEntryResult result = future.get(30, TimeUnit.SECONDS);
+
+                ZipEntry newEntry = new ZipEntry(result.entry.getName());
+                newEntry.setTime(result.entry.getTime());
+                zipOut.putNextEntry(newEntry);
+                zipOut.write(result.processedData);
                 zipOut.closeEntry();
+
+                totalReplacements += result.replacements;
             }
 
             zipOut.finish();
 
-            ProcessingResult result = new ProcessingResult(totalBytesProcessed, totalReplacements, placeholders.size());
-            logger.debug("ZIP processing completed: {} files processed", filesProcessed);
+            ProcessingResult finalResult = new ProcessingResult(totalBytesProcessed, totalReplacements, placeholders.size());
+            logger.debug("High-performance ZIP processing completed: {} files processed in parallel", filesProcessed);
 
-            return result;
+            return finalResult;
         }
     }
 
-    private ProcessingResult processArchiveEntry(InputStream input, OutputStream output,
-                                               ZipEntry entry, Map<String, String> placeholders,
-                                               boolean isJar) throws Exception {
-        long bytesProcessed = 0;
-        long replacements = 0;
+    private ArchiveEntryResult processEntryTask(ArchiveEntryTask task) throws Exception {
+        ZipEntry entry = task.entry;
+        byte[] originalData = task.originalData;
+        Map<String, String> placeholders = task.placeholders;
+        boolean isJar = task.isJar;
 
         if (isArchive(entry.getName()) && EnvironmentSetup.isRecursiveArchivesEnabled()) {
             logger.debug("Recursively processing nested archive: {}", entry.getName());
 
-            ByteArrayOutputStream nestedOutput = new ByteArrayOutputStream();
-            ProcessingResult nestedResult;
+            try (ByteArrayInputStream input = new ByteArrayInputStream(originalData);
+                 ByteArrayOutputStream output = new ByteArrayOutputStream(originalData.length + (originalData.length >> 2))) {
 
-            if (isJar) {
-                nestedResult = processJarFile(input, nestedOutput, placeholders, entry.getName());
-            } else {
-                nestedResult = processZipFile(input, nestedOutput, placeholders, entry.getName());
+                ProcessingResult nestedResult;
+                if (isJar) {
+                    nestedResult = processJarFileOptimized(input, output, placeholders, entry.getName());
+                } else {
+                    nestedResult = processZipFileOptimized(input, output, placeholders, entry.getName());
+                }
+
+                return new ArchiveEntryResult(entry, output.toByteArray(), nestedResult.getReplacementCount());
             }
-
-            bytesProcessed += nestedResult.getBytesProcessed();
-            replacements += nestedResult.getReplacementCount();
-
-            output.write(nestedOutput.toByteArray());
         } else if (isTextFile(entry.getName())) {
             logger.debug("Processing text file: {}", entry.getName());
-            ProcessingResult result = processTextEntry(input, output, placeholders);
-            bytesProcessed = result.getBytesProcessed();
-            replacements = result.getReplacementCount();
+
+            try (ByteArrayInputStream input = new ByteArrayInputStream(originalData);
+                 ByteArrayOutputStream output = new ByteArrayOutputStream(originalData.length + (originalData.length >> 2))) {
+
+                PlaceholderEngine engineToUse = originalData.length > PARALLEL_THRESHOLD ? parallelEngine : engine;
+                ProcessingResult result = engineToUse.processStream(input, output, placeholders);
+
+                return new ArchiveEntryResult(entry, output.toByteArray(), result.getReplacementCount());
+            }
         } else if (isClassFile(entry.getName())) {
             logger.debug("Processing class file: {}", entry.getName());
-            ProcessingResult result = processClassFile(input, output, entry.getName(), placeholders);
-            bytesProcessed = result.getBytesProcessed();
-            replacements = result.getReplacementCount();
+
+            try (ByteArrayInputStream input = new ByteArrayInputStream(originalData);
+                 ByteArrayOutputStream output = new ByteArrayOutputStream(originalData.length + (originalData.length >> 2))) {
+
+                ProcessingResult result = processClassFileOptimized(input, output, entry.getName(), placeholders);
+                return new ArchiveEntryResult(entry, output.toByteArray(), result.getReplacementCount());
+            }
         } else {
-            logger.debug("Processing regular file: {}", entry.getName());
-            bytesProcessed = input.transferTo(output);
+            logger.debug("Copying regular file without processing: {}", entry.getName());
+            return new ArchiveEntryResult(entry, originalData, 0);
         }
-
-        return new ProcessingResult(bytesProcessed, replacements, placeholders.size());
     }
 
-    private boolean isArchive(String filename) {
-        String lowerCaseName = filename.toLowerCase();
-        return lowerCaseName.endsWith(".zip") || lowerCaseName.endsWith(".jar") ||
-               lowerCaseName.endsWith(".war") || lowerCaseName.endsWith(".ear");
-    }
-
-    private ProcessingResult processRegularFile(InputStream input, OutputStream output,
-                                              Map<String, String> placeholders) throws IOException {
-        long bytesTransferred = input.transferTo(output);
-        return new ProcessingResult(bytesTransferred, 0, 0);
-    }
-
-    private ProcessingResult processTextEntry(InputStream input, OutputStream output,
-                                            Map<String, String> placeholders) throws IOException {
-        ByteArrayOutputStream buffer = new ByteArrayOutputStream();
-        input.transferTo(buffer);
-
-        ByteArrayInputStream bufferedInput = new ByteArrayInputStream(buffer.toByteArray());
-        ByteArrayOutputStream processedOutput = new ByteArrayOutputStream();
-
-        ProcessingResult result = engine.processStream(bufferedInput, processedOutput, placeholders);
-        output.write(processedOutput.toByteArray());
-
-        return result;
-    }
-
-    private ProcessingResult processClassFile(InputStream input, OutputStream output,
-                                            String className, Map<String, String> placeholders) throws IOException {
+    private ProcessingResult processClassFileOptimized(InputStream input, OutputStream output,
+                                                     String className, Map<String, String> placeholders) throws IOException {
         try {
             ByteArrayOutputStream classBuffer = new ByteArrayOutputStream();
-            input.transferTo(classBuffer);
+            transferOptimized(input, classBuffer);
             byte[] classBytes = classBuffer.toByteArray();
 
             ByteArrayInputStream bais = new ByteArrayInputStream(classBytes);
             DataInputStream dis = new DataInputStream(bais);
-            ByteArrayOutputStream baos = new ByteArrayOutputStream();
+            ByteArrayOutputStream baos = new ByteArrayOutputStream(classBytes.length + (classBytes.length >> 2));
             DataOutputStream dos = new DataOutputStream(baos);
 
             int magic = dis.readInt();
@@ -258,6 +300,11 @@ public class ArchiveFileProcessor implements FileProcessor {
 
             int replacements = 0;
 
+            // Pre-sorted placeholders for better performance
+            List<Map.Entry<String, String>> sortedPlaceholders = placeholders.entrySet().stream()
+                .sorted((e1, e2) -> Integer.compare(e2.getKey().length(), e1.getKey().length()))
+                .toList();
+
             for (int i = 1; i < cpCount; i++) {
                 int tag = dis.readUnsignedByte();
                 dos.writeByte(tag);
@@ -269,19 +316,22 @@ public class ArchiveFileProcessor implements FileProcessor {
                         String s = new String(bytes, StandardCharsets.UTF_8);
 
                         String newS = s;
-                        for (Map.Entry<String, String> p : placeholders.entrySet()) {
+                        for (Map.Entry<String, String> p : sortedPlaceholders) {
                             String oldValue = p.getKey();
                             String newValue = p.getValue();
                             if (newS.contains(oldValue)) {
-                                int count = 0;
-                                int idx = 0;
-                                while ((idx = newS.indexOf(oldValue, idx)) != -1) {
-                                    count++;
-                                    idx += oldValue.length();
-                                }
-                                if (count > 0) {
-                                    newS = newS.replace(oldValue, newValue);
-                                    replacements += count;
+                                int beforeLength = newS.length();
+                                newS = newS.replace(oldValue, newValue);
+                                int afterLength = newS.length();
+
+                                // Count actual replacements more efficiently
+                                if (beforeLength != afterLength) {
+                                    int lengthDiff = newValue.length() - oldValue.length();
+                                    if (lengthDiff != 0) {
+                                        replacements += (afterLength - beforeLength) / lengthDiff;
+                                    } else {
+                                        replacements += (beforeLength - afterLength) / oldValue.length();
+                                    }
                                 }
                             }
                         }
@@ -356,27 +406,24 @@ public class ArchiveFileProcessor implements FileProcessor {
 
         } catch (Exception e) {
             logger.error("Failed to process class file {}: {}", className, e.getMessage());
-            ByteArrayOutputStream fallbackBuffer = new ByteArrayOutputStream();
-            input.transferTo(fallbackBuffer);
-            output.write(fallbackBuffer.toByteArray());
-            return new ProcessingResult(fallbackBuffer.size(), 0, 0);
+            transferOptimized(input, output);
+            return new ProcessingResult(0, 0, 0);
         }
     }
 
-    private int findByteSequence(byte[] array, byte[] sequence, int startIndex) {
-        if (sequence.length == 0 || startIndex >= array.length) {
-            return -1;
+    // Optimized data transfer with larger buffers
+    private void transferOptimized(InputStream input, OutputStream output) throws IOException {
+        byte[] buffer = new byte[BUFFER_SIZE];
+        int bytesRead;
+        while ((bytesRead = input.read(buffer)) != -1) {
+            output.write(buffer, 0, bytesRead);
         }
+    }
 
-        outer: for (int i = startIndex; i <= array.length - sequence.length; i++) {
-            for (int j = 0; j < sequence.length; j++) {
-                if (array[i + j] != sequence[j]) {
-                    continue outer;
-                }
-            }
-            return i;
-        }
-        return -1;
+    private boolean isArchive(String filename) {
+        String lowerCaseName = filename.toLowerCase();
+        return lowerCaseName.endsWith(".zip") || lowerCaseName.endsWith(".jar") ||
+               lowerCaseName.endsWith(".war") || lowerCaseName.endsWith(".ear");
     }
 
     private boolean isTextFile(String filename) {
@@ -390,6 +437,33 @@ public class ArchiveFileProcessor implements FileProcessor {
 
     private boolean isClassFile(String filename) {
         return filename != null && filename.toLowerCase().endsWith(".class");
+    }
+
+    // Helper classes for parallel processing
+    private static class ArchiveEntryTask {
+        final ZipEntry entry;
+        final byte[] originalData;
+        final Map<String, String> placeholders;
+        final boolean isJar;
+
+        ArchiveEntryTask(ZipEntry entry, byte[] originalData, Map<String, String> placeholders, boolean isJar) {
+            this.entry = entry;
+            this.originalData = originalData;
+            this.placeholders = placeholders;
+            this.isJar = isJar;
+        }
+    }
+
+    private static class ArchiveEntryResult {
+        final ZipEntry entry;
+        final byte[] processedData;
+        final long replacements;
+
+        ArchiveEntryResult(ZipEntry entry, byte[] processedData, long replacements) {
+            this.entry = entry;
+            this.processedData = processedData;
+            this.replacements = replacements;
+        }
     }
 
     @Override
@@ -434,7 +508,7 @@ public class ArchiveFileProcessor implements FileProcessor {
 
     @Override
     public String getProcessorName() {
-        return "ArchiveFileProcessor";
+        return "HighPerformanceArchiveFileProcessor";
     }
 
     @Override
@@ -449,7 +523,8 @@ public class ArchiveFileProcessor implements FileProcessor {
 
     @Override
     public long estimateMemoryUsage(long fileSize) {
-        return Math.min(fileSize / 4, 50 * 1024 * 1024);
+        // Higher memory usage for parallel processing but much faster
+        return Math.min(fileSize / 2, 200 * 1024 * 1024);
     }
 
     private String getFileExtension(String filename) {
