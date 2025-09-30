@@ -1,0 +1,62 @@
+{
+  "_comment": "DO NOT EDIT: FILE GENERATED AUTOMATICALLY BY PTERODACTYL PANEL - PTERODACTYL.IO",
+  "meta": {
+    "version": "PTDL_v2",
+    "update_url": null
+  },
+  "exported_at": "2025-09-30T04:05:57-04:00",
+  "name": "Placy",
+  "author": "Harfull",
+  "description": "The official egg for running a Placy server",
+  "features": null,
+  "docker_images": {
+    "ghcr.io\/ptero-eggs\/yolks:java_21": "ghcr.io\/ptero-eggs\/yolks:java_21"
+  },
+  "file_denylist": [],
+  "startup": "java -Dterminal.jline=false -Dterminal.ansi=true -jar {{PLACY_JARFILE}}",
+  "config": {
+    "files": "{}",
+    "startup": "{\r\n    \"done\": \"Running on: \"\r\n}",
+    "logs": "{}",
+    "stop": "^C"
+  },
+  "scripts": {
+    "installation": {
+      "script": "PROJECT=java\r\n\r\napt update\r\napt install -y curl -y\r\n\r\ncd \/mnt\/server || exit\r\n\r\nLATEST_TAG=$(curl -s https:\/\/api.github.com\/repos\/Harfull\/Placy\/releases\/latest \\\r\n  | grep '\"tag_name\":' | sed -E 's\/.*\"([^\"]+)\".*\/\\1\/')\r\n\r\necho \"Latest release: $LATEST_TAG\"\r\n\r\ncurl -L -o Placy.jar \"https:\/\/github.com\/Harfull\/Placy\/releases\/download\/$LATEST_TAG\/Placy.jar\"\r\n\r\njava -Dterminal.jline=false -Dterminal.ansi=true -jar {{PLACY_JARFILE}}",
+      "container": "ghcr.io\/ptero-eggs\/yolks:debian",
+      "entrypoint": "bash"
+    }
+  },
+  "variables": [
+    {
+      "name": "Update Checker",
+      "description": "Enable automatic update checking in Placy?",
+      "env_variable": "CHECK_UPDATES",
+      "default_value": "false",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|string|max:20",
+      "field_type": "text"
+    },
+    {
+      "name": "Placy JAR",
+      "description": "Specify the JAR file the egg should use",
+      "env_variable": "PLACY_JARFILE",
+      "default_value": "Placy.jar",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|string|max:20",
+      "field_type": "text"
+    },
+    {
+      "name": "Async Processing",
+      "description": "Should Placy process files asynchronously?",
+      "env_variable": "ASYNC_PROCESSING",
+      "default_value": "true",
+      "user_viewable": false,
+      "user_editable": false,
+      "rules": "required|string|max:20",
+      "field_type": "text"
+    }
+  ]
+}
