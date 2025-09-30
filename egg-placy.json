@@ -16,7 +16,7 @@
   "startup": "java -Dterminal.jline=false -Dterminal.ansi=true -jar {{PLACY_JARFILE}}",
   "config": {
     "files": "{}",
-    "startup": "{\r\n    \"done\": \"Running on: \"\r\n}",
+    "startup": "{\r\n    \"done\": \"Started Placy application successfully\"\r\n}",
     "logs": "{}",
     "stop": "^C"
   },
