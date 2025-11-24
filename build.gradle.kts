@@ -6,7 +6,7 @@ plugins {
 }
 
 group = "net.kyver"
-version = "1.4"
+version = "1.4.1"
 
 java {
     toolchain {

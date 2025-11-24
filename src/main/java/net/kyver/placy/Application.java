@@ -18,7 +18,7 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class Application {
     private static final Logger logger = LoggerFactory.getLogger(Application.class);
 
-    private static final String VERSION = "1.4";
+    private static final String VERSION = "1.4.1";
 
     @Autowired
     private Updater updater;

@@ -56,6 +56,7 @@ public class TransformController {
 
             if (!transformService.isFileSupported(filename, file.getContentType())) {
                 logger.warn("Unsupported file type: {} (MIME: {})", filename, file.getContentType());
+                assert filename != null;
                 return ResponseEntity.status(HttpStatus.UNSUPPORTED_MEDIA_TYPE)
                     .body(Map.of("error", "Unsupported file type",
                                "filename", filename,
@@ -77,25 +78,12 @@ public class TransformController {
 
             if (!result.isSuccess()) {
                 logger.error("Transform failed for {}: {}", filename, result.getErrorMessage());
+                assert filename != null;
                 return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(Map.of("error", result.getErrorMessage(), "filename", filename));
             }
 
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentDispositionFormData("attachment", filename);
-            headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
-            headers.setContentLength(result.getContent().length);
-
-            if (result.getProcessingResult() != null) {
-                headers.add("X-Processing-Time-Ms",
-                    String.valueOf(result.getProcessingResult().getProcessingTimeMillis()));
-                headers.add("X-Throughput-MBps",
-                    String.valueOf(result.getProcessingResult().getThroughputMBps()));
-                headers.add("X-Replacements-Made",
-                    String.valueOf(result.getProcessingResult().getReplacementCount()));
-                double seconds = result.getProcessingResult().getProcessingTimeMillis() / 1000.0;
-                headers.add("X-Processing-Time-S", String.format("%.3f", seconds));
-            }
+            HttpHeaders headers = getHttpHeaders(filename, result);
 
             if (result.getProcessingResult() != null) {
                 double secs = result.getProcessingResult().getProcessingTimeMillis() / 1000.0;
@@ -115,6 +103,25 @@ public class TransformController {
                            "message", e.getMessage(),
                            "filename", filename));
         }
+    }
+
+    private static HttpHeaders getHttpHeaders(String filename, TransformationResult result) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentDispositionFormData("attachment", filename);
+        headers.setContentType(MediaType.APPLICATION_OCTET_STREAM);
+        headers.setContentLength(result.getContent().length);
+
+        if (result.getProcessingResult() != null) {
+            headers.add("X-Processing-Time-Ms",
+                String.valueOf(result.getProcessingResult().getProcessingTimeMillis()));
+            headers.add("X-Throughput-MBps",
+                String.valueOf(result.getProcessingResult().getThroughputMBps()));
+            headers.add("X-Replacements-Made",
+                String.valueOf(result.getProcessingResult().getReplacementCount()));
+            double seconds = result.getProcessingResult().getProcessingTimeMillis() / 1000.0;
+            headers.add("X-Processing-Time-S", String.format("%.3f", seconds));
+        }
+        return headers;
     }
 
     @PostMapping(value = "/transform/batch", consumes = MediaType.MULTIPART_FORM_DATA_VALUE)
