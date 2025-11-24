@@ -79,16 +79,16 @@ public class EnvironmentSetup {
         }
 
         String asyncProcessing = getConfigValue("ASYNC_PROCESSING", "true");
-        asyncProcessingEnabled = "true".equalsIgnoreCase(asyncProcessing) || "1".equals(asyncProcessing);
+        asyncProcessingEnabled = !"false".equalsIgnoreCase(asyncProcessing) && !"0".equals(asyncProcessing);
 
         String perfMonitoring = getConfigValue("PERFORMANCE_MONITORING_ENABLED", "true");
-        performanceMonitoringEnabled = "true".equalsIgnoreCase(perfMonitoring) || "1".equals(perfMonitoring);
+        performanceMonitoringEnabled = !"false".equalsIgnoreCase(perfMonitoring) && !"0".equals(perfMonitoring);
 
         String recursiveArchives = getConfigValue("RECURSIVE_ARCHIVES", "false");
-        recursiveArchivesEnabled = "true".equalsIgnoreCase(recursiveArchives) || "1".equals(recursiveArchives);
+        recursiveArchivesEnabled = !"false".equalsIgnoreCase(recursiveArchives) && !"0".equals(recursiveArchives);
 
         String checkUpdates = getConfigValue("CHECK_UPDATES", "true");
-        checkUpdatesEnabled = "true".equalsIgnoreCase(checkUpdates) || "1".equals(checkUpdates);
+        checkUpdatesEnabled = !"false".equalsIgnoreCase(checkUpdates) && !"0".equals(checkUpdates);
 
         String debugMode = getConfigValue("DEBUG_MODE", "false");
         boolean debugEnabled = "true".equalsIgnoreCase(debugMode) || "1".equals(debugMode);

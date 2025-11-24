@@ -59,7 +59,7 @@ public class Application {
                 logger.warn("Update check failed: {}", e.getMessage());
             }
         } else {
-            logger.debug("Update checking is disabled via CHECK_UPDATES environment variable");
+            logger.info("Update checking is disabled via CHECK_UPDATES environment variable");
         }
     }
 

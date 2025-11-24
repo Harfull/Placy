@@ -2,6 +2,8 @@ package net.kyver.placy.util;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 import org.yaml.snakeyaml.Yaml;
 
@@ -18,26 +20,19 @@ import net.kyver.placy.config.EnvironmentSetup;
 @Component
 public class Updater {
     
+    private static final Logger logger = LoggerFactory.getLogger(Updater.class);
+
     private static final String ORIGINAL_JAR_NAME = "Placy.jar";
     private static final String NEW_JAR_NAME = "Placy.jar.new";
     private static final String BACKUP_JAR_NAME = "Placy.jar.backup";
     private static final String TEMP_JAR_NAME = "Placy.jar.temp";
 
-    private static final String ANSI_RESET = "\u001B[0m";
-    private static final String ANSI_RED = "\u001B[31m";
-    private static final String ANSI_GREEN = "\u001B[32m";
-    private static final String ANSI_YELLOW = "\u001B[33m";
-    private static final String ANSI_CYAN = "\u001B[36m";
-    private static final String ANSI_BOLD = "\u001B[1m";
-    
-    private static final String LOG_PREFIX = ANSI_BOLD + ANSI_CYAN + "[ProcessUpdater]" + ANSI_RESET;
-    
     public void checkAndHandleUpdate() {
         try {
             EnvironmentSetup.loadDotEnv();
 
             if (!EnvironmentSetup.isCheckUpdatesEnabled()) {
-                log("INFO", "Update checking is disabled via CHECK_UPDATES environment variable");
+                logger.info("Update checking is disabled via CHECK_UPDATES environment variable");
                 return;
             }
 
@@ -45,10 +40,10 @@ public class Updater {
             File currentJarFile = new File(currentJarPath);
             String jarName = currentJarFile.getName();
 
-            log("INFO", "Starting update check for: " + jarName);
+            logger.debug("Starting update check for: {}", jarName);
 
             if (jarName.equals(NEW_JAR_NAME)) {
-                log("DEBUG", "Detected " + NEW_JAR_NAME + " - completing update process...");
+                logger.debug("Detected {} - completing update process...", NEW_JAR_NAME);
                 completeUpdateProcess(currentJarFile);
                 return;
             }
@@ -58,24 +53,24 @@ public class Updater {
             }
 
         } catch (Exception e) {
-            log("ERROR", "Update process failed: " + e.getMessage());
+            logger.error("Update process failed: {}", e.getMessage(), e);
         }
     }
     
     private void checkForUpdates(File currentJarFile) throws Exception {
-        log("INFO", "Checking for updates...");
-        
+        logger.info("🔍 Checking for updates...");
+
         String currentVersion = getCurrentVersion(currentJarFile);
         String latestVersion = getLatestVersion();
         
-        log("INFO", "Current version: " + (currentVersion != null ? currentVersion : "Unknown"));
-        log("INFO", "Latest version: " + latestVersion);
-        
+        logger.info("Current version: {}", currentVersion != null ? currentVersion : "Unknown");
+        logger.debug("Latest version: {}", latestVersion);
+
         if (currentVersion == null || !normalizeVersion(currentVersion).equals(normalizeVersion(latestVersion))) {
-            log("INFO", ANSI_YELLOW + "Update available! Starting download..." + ANSI_RESET);
+            logger.info("🆕 Update available! New version: {} - Starting download...", latestVersion);
             startUpdateProcess(currentJarFile);
         } else {
-            log("SUCCESS", "Application is up to date!");
+            logger.info("✅ Application is up to date!");
         }
     }
     
@@ -91,11 +86,11 @@ public class Updater {
             }
             Files.move(tempJarFile.toPath(), newJarFile.toPath(), StandardCopyOption.REPLACE_EXISTING);
             
-            log("SUCCESS", "Download completed. Starting new process...");
+            logger.info("✅ Download completed. Starting new process...");
 
             startNewProcess(newJarFile);
 
-            log("INFO", "Shutting down current process...");
+            logger.info("Shutting down current process...");
             System.exit(0);
             
         } catch (Exception e) {
@@ -110,12 +105,12 @@ public class Updater {
         File backupJarFile = new File(newJarFile.getParent(), BACKUP_JAR_NAME);
 
         try {
-            log("INFO", "Completing update process...");
+            logger.info("Completing update process...");
 
             Thread.sleep(2000);
 
             if (targetJarFile.exists()) {
-                log("INFO", "Creating backup of existing " + ORIGINAL_JAR_NAME + "...");
+                logger.debug("Creating backup of existing {}...", ORIGINAL_JAR_NAME);
                 if (backupJarFile.exists()) {
                     Files.delete(backupJarFile.toPath());
                 }
@@ -123,27 +118,27 @@ public class Updater {
                 Files.delete(targetJarFile.toPath());
             }
 
-            log("INFO", "Installing new version...");
+            logger.info("Installing new version...");
             Files.copy(newJarFile.toPath(), targetJarFile.toPath());
 
             if (!targetJarFile.exists() || targetJarFile.length() == 0) {
                 throw new RuntimeException("New jar file verification failed");
             }
             
-            log("SUCCESS", "Update completed successfully!");
+            logger.info("✅ Update completed successfully!");
 
             startNewProcess(targetJarFile);
 
             cleanupUpdateFiles(newJarFile, backupJarFile);
 
-            log("INFO", "Shutting down update process...");
+            logger.info("Shutting down update process...");
             System.exit(0);
             
         } catch (Exception e) {
-            log("ERROR", "Update completion failed: " + e.getMessage());
+            logger.error("Update completion failed: {}", e.getMessage());
 
             if (backupJarFile.exists() && !targetJarFile.exists()) {
-                log("WARN", "Restoring from backup...");
+                logger.warn("Restoring from backup...");
                 Files.move(backupJarFile.toPath(), targetJarFile.toPath());
                 startNewProcess(targetJarFile);
             }
@@ -166,8 +161,8 @@ public class Updater {
         Map<String, String> env = processBuilder.environment();
         env.putAll(System.getenv());
         
-        log("INFO", "Starting new process: " + jarFile.getName());
-        
+        logger.info("Starting new process: {}", jarFile.getName());
+
         Process process = processBuilder.start();
 
         Thread.sleep(1000);
@@ -176,7 +171,7 @@ public class Updater {
             throw new RuntimeException("New process failed to start");
         }
         
-        log("SUCCESS", "New process started successfully!");
+        logger.info("✅ New process started successfully!");
     }
     
     private String getCurrentVersion(File jarFile) {
@@ -213,11 +208,11 @@ public class Updater {
                 }
             }
             
-            log("WARN", "Version information not found in jar");
+            logger.warn("Version information not found in jar");
             return null;
             
         } catch (Exception e) {
-            log("ERROR", "Error reading version from jar: " + e.getMessage());
+            logger.error("Error reading version from jar: {}", e.getMessage());
             return null;
         }
     }
@@ -269,7 +264,7 @@ public class Updater {
     }
     
     private void downloadLatestVersion(File targetFile) throws Exception {
-        log("INFO", "Downloading latest version...");
+        logger.info("Downloading latest version...");
 
         URL url = new URL("https://github.com/Harfull/Placy/releases/latest/download/" + ORIGINAL_JAR_NAME);
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
@@ -282,7 +277,7 @@ public class Updater {
 
             int responseCode = connection.getResponseCode();
             if (responseCode != HttpURLConnection.HTTP_OK) {
-                throw new RuntimeException("Failed to download: " + responseCode);
+                throw new RuntimeException("Failed to download: HTTP " + responseCode);
             }
 
             long totalBytes = connection.getContentLengthLong();
@@ -293,14 +288,18 @@ public class Updater {
                 byte[] buffer = new byte[8192];
                 long downloadedBytes = 0;
                 int bytesRead;
+                int lastLoggedProgress = 0;
 
                 while ((bytesRead = input.read(buffer)) != -1) {
                     output.write(buffer, 0, bytesRead);
                     downloadedBytes += bytesRead;
 
-                    if (totalBytes > 0 && downloadedBytes % (1024 * 100) == 0) {
-                        long progress = (downloadedBytes * 100) / totalBytes;
-                        log("INFO", "Download progress: " + progress + "%");
+                    if (totalBytes > 0) {
+                        int progress = (int) ((downloadedBytes * 100) / totalBytes);
+                        if (progress >= lastLoggedProgress + 25) {
+                            logger.info("Download progress: {}%", progress);
+                            lastLoggedProgress = progress;
+                        }
                     }
                 }
             }
@@ -312,7 +311,7 @@ public class Updater {
             throw new RuntimeException("Downloaded file is invalid or empty");
         }
 
-        log("SUCCESS", "Download completed: " + targetFile.getName());
+        logger.info("✅ Download completed: {}", targetFile.getName());
     }
     
     private void cleanupUpdateFiles(File newJarFile, File backupJarFile) {
@@ -327,19 +326,19 @@ public class Updater {
             if (newJarFiles != null) {
                 for (File file : newJarFiles) {
                     if (!file.getAbsolutePath().equals(currentJarFile.getAbsolutePath())) {
-                        log("INFO", "Cleaning up old " + NEW_JAR_NAME + ": " + file.getName());
+                        logger.debug("Cleaning up old {}: {}", NEW_JAR_NAME, file.getName());
                         Files.deleteIfExists(file.toPath());
                     }
                 }
             }
 
             if (backupJarFile.exists()) {
-                log("INFO", "Cleaning up backup file...");
+                logger.debug("Cleaning up backup file...");
                 Files.deleteIfExists(backupJarFile.toPath());
             }
             
         } catch (Exception e) {
-            log("WARN", "Cleanup failed: " + e.getMessage());
+            logger.warn("Cleanup failed: {}", e.getMessage());
         }
     }
     
@@ -349,7 +348,7 @@ public class Updater {
                 Files.delete(file.toPath());
             }
         } catch (Exception e) {
-            log("WARN", "Failed to cleanup file: " + file.getName());
+            logger.warn("Failed to cleanup file: {}", file.getName());
         }
     }
     
@@ -369,16 +368,5 @@ public class Updater {
     private String normalizeVersion(String version) {
         if (version == null) return "";
         return version.trim().replaceAll("^[vV]", "");
-    }
-    
-    private void log(String level, String message) {
-        String color = switch (level) {
-            case "ERROR" -> ANSI_RED;
-            case "WARN" -> ANSI_YELLOW;
-            case "SUCCESS" -> ANSI_GREEN;
-            default -> "";
-        };
-        
-        System.out.println(LOG_PREFIX + " " + color + level + ANSI_RESET + " " + message);
     }
 }
