@@ -13,6 +13,8 @@ import java.nio.file.*;
 import java.util.Map;
 import java.util.jar.JarFile;
 
+import net.kyver.placy.config.EnvironmentSetup;
+
 @Component
 public class Updater {
     
@@ -32,6 +34,13 @@ public class Updater {
     
     public void checkAndHandleUpdate() {
         try {
+            EnvironmentSetup.loadDotEnv();
+
+            if (!EnvironmentSetup.isCheckUpdatesEnabled()) {
+                log("INFO", "Update checking is disabled via CHECK_UPDATES environment variable");
+                return;
+            }
+
             String currentJarPath = getCurrentJarPath();
             File currentJarFile = new File(currentJarPath);
             String jarName = currentJarFile.getName();
@@ -39,7 +48,7 @@ public class Updater {
             log("INFO", "Starting update check for: " + jarName);
 
             if (jarName.equals(NEW_JAR_NAME)) {
-                log("INFO", "Detected " + NEW_JAR_NAME + " - completing update process...");
+                log("DEBUG", "Detected " + NEW_JAR_NAME + " - completing update process...");
                 completeUpdateProcess(currentJarFile);
                 return;
             }
@@ -50,7 +59,6 @@ public class Updater {
 
         } catch (Exception e) {
             log("ERROR", "Update process failed: " + e.getMessage());
-            // Improved logging: removed printStackTrace and replaced with log
         }
     }
     

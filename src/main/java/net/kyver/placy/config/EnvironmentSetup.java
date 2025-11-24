@@ -90,6 +90,14 @@ public class EnvironmentSetup {
         String checkUpdates = getConfigValue("CHECK_UPDATES", "true");
         checkUpdatesEnabled = "true".equalsIgnoreCase(checkUpdates) || "1".equals(checkUpdates);
 
+        String debugMode = getConfigValue("DEBUG_MODE", "false");
+        boolean debugEnabled = "true".equalsIgnoreCase(debugMode) || "1".equals(debugMode);
+        if (debugEnabled) {
+            System.setProperty("debug", "true");
+            System.setProperty("logging.level.net.kyver.placy", "DEBUG");
+            System.setProperty("logging.level.root", "DEBUG");
+        }
+
         try {
             maxFileSize = parseFileSize(getConfigValue("MAX_FILE_SIZE", "1GB"));
             EnvironmentSetup.maxFileSize = Integer.parseInt(maxFileSize);
