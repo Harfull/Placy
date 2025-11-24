@@ -18,10 +18,14 @@ import org.springframework.scheduling.annotation.EnableScheduling;
 public class Application {
     private static final Logger logger = LoggerFactory.getLogger(Application.class);
 
-    private static final String VERSION = "1.4.1";
+    private static final String VERSION = "v1.4.1";
 
     @Autowired
     private Updater updater;
+
+    public static String getVersion() {
+        return VERSION;
+    }
 
     public static void main(String[] args) {
         EnvironmentSetup.loadDotEnv();

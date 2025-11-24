@@ -2,10 +2,11 @@ package net.kyver.placy.util;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import net.kyver.placy.Application;
+import net.kyver.placy.config.EnvironmentSetup;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
-import org.yaml.snakeyaml.Yaml;
 
 import java.io.*;
 import java.lang.management.ManagementFactory;
@@ -13,9 +14,6 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.file.*;
 import java.util.Map;
-import java.util.jar.JarFile;
-
-import net.kyver.placy.config.EnvironmentSetup;
 
 @Component
 public class Updater {
@@ -60,13 +58,13 @@ public class Updater {
     private void checkForUpdates(File currentJarFile) throws Exception {
         logger.info("🔍 Checking for updates...");
 
-        String currentVersion = getCurrentVersion(currentJarFile);
+        String currentVersion = getCurrentVersion();
         String latestVersion = getLatestVersion();
         
-        logger.info("Current version: {}", currentVersion != null ? currentVersion : "Unknown");
+        logger.info("Current version: {}", currentVersion);
         logger.debug("Latest version: {}", latestVersion);
 
-        if (currentVersion == null || !normalizeVersion(currentVersion).equals(normalizeVersion(latestVersion))) {
+        if (!normalizeVersion(currentVersion).equals(normalizeVersion(latestVersion))) {
             logger.info("🆕 Update available! New version: {} - Starting download...", latestVersion);
             startUpdateProcess(currentJarFile);
         } else {
@@ -174,63 +172,10 @@ public class Updater {
         logger.info("✅ New process started successfully!");
     }
     
-    private String getCurrentVersion(File jarFile) {
-        if (!jarFile.exists()) {
-            return null;
-        }
-        
-        try (JarFile jar = new JarFile(jarFile)) {
-            String[] possiblePaths = {
-                "BOOT-INF/classes/application.yml",
-                "BOOT-INF/classes/application.yaml", 
-                "application.yml",
-                "application.yaml",
-                "BOOT-INF/classes/version.yml",
-                "version.yml"
-            };
-            
-            for (String path : possiblePaths) {
-                var entry = jar.getJarEntry(path);
-                if (entry != null) {
-                    try (InputStream input = jar.getInputStream(entry)) {
-                        Yaml yaml = new Yaml();
-                        @SuppressWarnings("unchecked")
-                        Map<String, Object> data = yaml.load(input);
+    private String getCurrentVersion() {
+        return Application.getVersion();
+    }
 
-                        String[] versionKeys = {"version", "app.version", "application.version"};
-                        for (String key : versionKeys) {
-                            Object version = getNestedValue(data, key);
-                            if (version != null) {
-                                return version.toString();
-                            }
-                        }
-                    }
-                }
-            }
-            
-            logger.warn("Version information not found in jar");
-            return null;
-            
-        } catch (Exception e) {
-            logger.error("Error reading version from jar: {}", e.getMessage());
-            return null;
-        }
-    }
-    
-    private Object getNestedValue(Map<String, Object> map, String key) {
-        if (key.contains(".")) {
-            String[] parts = key.split("\\.", 2);
-            Object value = map.get(parts[0]);
-            if (value instanceof Map) {
-                @SuppressWarnings("unchecked")
-                Map<String, Object> nestedMap = (Map<String, Object>) value;
-                return getNestedValue(nestedMap, parts[1]);
-            }
-            return null;
-        }
-        return map.get(key);
-    }
-    
     private String getLatestVersion() throws Exception {
         URL url = new URL("https://api.github.com/repos/Harfull/Placy/releases/latest");
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
