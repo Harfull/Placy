@@ -1,5 +1,7 @@
 # Placy
 
+**⚠️ Deprecated:** This project has been deprecated in favor of [PlacyAPI](https://github.com/PlacyAPI/api), which is fully rewritten in Rust. The Java version of Placy will no longer receive updates or support.
+
 ![Java](https://img.shields.io/badge/Java-17+-brightgreen.svg)
 ![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.2.0-brightgreen.svg)
 ![License](https://img.shields.io/badge/License-MIT-blue.svg)
